@@ -11,24 +11,34 @@
 ## Features / Özellikler
 
 **English:**
-- Automatic ad watching button click
-- Video watching and reward claiming
-- 10 ad cycle without page refresh
-- Cooldown management with countdown timer
-- In-game control panel
-- Chrome popup interface
-- Iframe ad closing support
+- Three selectable modes (see below)
+- Direct API reward flow (`start → watched → consumereward`) with live wallet update
+- Automatic BusinessClub redirect on start
+- Cooldown / ban management with persistent countdown timer
+- In-game control panel + Chrome popup interface
 - Turkish / English language support
 
 **Türkçe:**
-- Reklam izle butonuna otomatik tıklama
-- Video izleme ve ödül claim etme
-- Sayfa yenilemeden 10 reklam döngüsü
-- Cooldown yönetimi ve geri sayım
-- Oyun içi kontrol paneli
-- Chrome popup arayüzü
-- Iframe reklam kapatma desteği
+- Üç seçilebilir mod (aşağıya bakın)
+- Doğrudan API ödül akışı (`start → watched → consumereward`) ve canlı cüzdan güncellemesi
+- Başlatınca otomatik BusinessClub yönlendirmesi
+- Cooldown / ban yönetimi ve kalıcı geri sayım
+- Oyun içi kontrol paneli + Chrome popup arayüzü
 - Türkçe / İngilizce dil desteği
+
+---
+
+## Modes / Modlar
+
+**English:**
+- **API bypass (recommended):** Runs the reward chain (`videos/start → videos/watched → consumereward`) directly through the API using the page's own Bearer token. No video is loaded; the Boss Coin balance is claimed instantly and the on-screen counter is refreshed via the page's own `updateWallet` (with animation), no page reload needed.
+- **Modal focus-loss:** Opens the reward modal and closes it after an adjustable delay (panel slider, 0–3000 ms). Note: the ad preroll still plays in the background — the reward fires when it completes. Use API bypass if you want to skip ads entirely.
+- **Normal:** Watches the full ad.
+
+**Türkçe:**
+- **API bypass (önerilen):** Ödül zincirini (`videos/start → videos/watched → consumereward`) sayfanın kendi Bearer token'ıyla doğrudan API üzerinden çalıştırır. Hiç video yüklenmez; Boss Coin bakiyesi anında claim edilir ve ekrandaki sayaç, sayfanın kendi `updateWallet` fonksiyonuyla (animasyonlu) F5 gerektirmeden güncellenir.
+- **Modal odak kaybı:** Ödül modalını açıp ayarlanabilir bir gecikme sonrası kapatır (panel slider, 0–3000 ms). Not: reklam preroll'ü yine arkada oynar — ödül reklam bitince gelir. Reklamı tamamen atlamak istersen API bypass'ı kullan.
+- **Normal:** Reklamı tam izler.
 
 ---
 
@@ -59,16 +69,16 @@
 ## Usage / Kullanım
 
 **English:**
-1. Open Business Club page
-2. Click "▶ Start" button on the top-left panel
-3. Bot starts watching ads automatically
-4. Click "⏸ Stop" button to pause
+1. Open the BusinessClub page (the bot redirects there automatically if needed)
+2. On the top-left panel, tick a mode — **API bypass** is recommended
+3. Click "▶ Start"; the bot runs the reward flow automatically
+4. Click "⏸ Stop" to pause
 
 **Türkçe:**
-1. Business Club sayfasını açın
-2. Sol üstteki "▶ Başlat" butonuna tıklayın
-3. Bot reklamları otomatik izlemeye başlar
-4. "⏸ Durdur" butonu ile durdurabilirsiniz
+1. BusinessClub sayfasını açın (gerekirse bot otomatik yönlendirir)
+2. Sol üstteki panelde bir mod seçin — **API bypass** önerilir
+3. "▶ Başlat"a tıklayın; bot ödül akışını otomatik çalıştırır
+4. "⏸ Durdur" ile durdurabilirsiniz
 
 ---
 
