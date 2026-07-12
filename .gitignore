@@ -1,0 +1,29 @@
+network-logs.json
+network-logs-2.json
+console-logs.txt
+osm_urls.txt
+*.log
+
+# Ağ/konsol analiz dökümleri (HAR vb.) — repoya girmez
+# DİKKAT: hassas-veri içeren HAR'lar canlı session cookie/token taşır, ASLA commit etme.
+*.har
+networklogs*.json
+assets/networklogs*.json
+assets/*legit*.json
+assets/*watch*.json
+
+# Tüm ağ/konsol log dökümleri (token/cookie taşır) — geniş kapsam
+assets/networklogs*
+assets/network-logs*
+assets/*console*.txt
+
+# Superpowers çalışma notları (spec/plan) — repoya girmez
+docs/superpowers/
+
+# IDE / editör yapılandırması
+.continue/
+.vscode/
+.claude/settings.local.json
+
+.DS_Store
+Thumbs.db

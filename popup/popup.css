@@ -1,0 +1,101 @@
+body {
+  width: 240px;
+  font-family: Arial, sans-serif;
+  padding: 0;
+  margin: 0;
+  background: #1a1a2e;
+  color: white;
+}
+
+.card {
+  padding: 15px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #333;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lang-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.lang-btn {
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+  line-height: 0;
+}
+
+.lang-btn.active {
+  border-color: #f1c40f;
+}
+
+.lang-btn img {
+  display: block;
+}
+
+.version {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.section {
+  margin-bottom: 12px;
+}
+
+.label {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.timer {
+  font-size: 22px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  font-family: 'Courier New', monospace;
+}
+
+.total-ads {
+  font-size: 18px;
+  font-weight: bold;
+  color: #f1c40f;
+}
+
+.status.ready {
+  color: #2ecc71;
+}
+
+.status.warning {
+  color: #e67e22;
+}
+
+.status.info {
+  color: #3498db;
+}

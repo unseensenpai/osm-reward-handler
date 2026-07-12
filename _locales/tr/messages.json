@@ -1,0 +1,80 @@
+﻿{
+  "appName": {
+    "message": "OSM Reward Handler"
+  },
+  "appDescription": {
+    "message": "Online Soccer Manager reklam ödülü otomasyonu."
+  },
+  "statusChecking": {
+    "message": "Kontrol ediliyor..."
+  },
+  "statusPreparing": {
+    "message": "Hazırlanıyor..."
+  },
+  "statusRunning": {
+    "message": "🟢 Çalışıyor"
+  },
+  "statusPaused": {
+    "message": "⏸ Durduruldu"
+  },
+  "statusWaiting": {
+    "message": "⏳ Bekleniyor"
+  },
+  "statusExpired": {
+    "message": "✅ Süre Doldu"
+  },
+  "statusNoIssue": {
+    "message": "Sorun Yok"
+  },
+  "statusIdle": {
+    "message": "⏸ Bekliyor"
+  },
+  "statusAdWatching": {
+    "message": "🎬 Reklam İzleniyor"
+  },
+  "statusRedirecting": {
+    "message": "🔄 BusinessClub'a yönlendiriliyor..."
+  },
+  "labelStatus": {
+    "message": "Durum"
+  },
+  "labelCountdown": {
+    "message": "Geri Sayım"
+  },
+  "labelTotalWatched": {
+    "message": "Toplam İzlenen"
+  },
+  "btnStart": {
+    "message": "Otomasyonu Başlat"
+  },
+  "btnStop": {
+    "message": "Durdur"
+  },
+  "btnPanelStart": {
+    "message": "▶ Başlat"
+  },
+  "btnPanelStop": {
+    "message": "⏸ Durdur"
+  },
+  "btnResume": {
+    "message": "▶ Devam Et"
+  },
+  "btnRetry": {
+    "message": "🔄 Tekrar Dene"
+  },
+  "panelAdCounter": {
+    "message": "Reklam #${current}"
+  },
+  "normalModeLabel": {
+    "message": "Normal mod (reklamı tam izle)"
+  },
+  "bypassLabel": {
+    "message": "API bypass (önerilen)"
+  },
+  "modalCloseLabel": {
+    "message": "Modal odak kaybı"
+  },
+  "modalCloseDelayLabel": {
+    "message": "Kapatma tamponu: ${ms} ms"
+  }
+}

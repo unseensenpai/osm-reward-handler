@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_appName__",
+  "description": "__MSG_appDescription__",
+  "version": "3.2.0",
+  "default_locale": "en",
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+
+  "host_permissions": [
+    "*://*.onlinesoccermanager.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.onlinesoccermanager.com/*"
+      ],
+      "css": [
+        "styles/panel.css"
+      ],
+      "js": [
+        "content/logger.js",
+        "content/storage.js",
+        "content/i18n.js",
+        "content/timer.js",
+        "content/ui.js",
+        "content/automation.js",
+        "iframe/iframe-handler.js",
+        "content/content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injected/inject.js",
+        "_locales/*"
+      ],
+      "matches": [
+        "*://*.onlinesoccermanager.com/*"
+      ]
+    }
+  ]
+}

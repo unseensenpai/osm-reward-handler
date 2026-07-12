@@ -1,0 +1,80 @@
+﻿{
+  "appName": {
+    "message": "OSM Reward Handler"
+  },
+  "appDescription": {
+    "message": "Online Soccer Manager ad reward automation."
+  },
+  "statusChecking": {
+    "message": "Checking..."
+  },
+  "statusPreparing": {
+    "message": "Preparing..."
+  },
+  "statusRunning": {
+    "message": "🟢 Running"
+  },
+  "statusPaused": {
+    "message": "⏸ Paused"
+  },
+  "statusWaiting": {
+    "message": "⏳ Waiting"
+  },
+  "statusExpired": {
+    "message": "✅ Time's Up"
+  },
+  "statusNoIssue": {
+    "message": "No Issue"
+  },
+  "statusIdle": {
+    "message": "⏸ Waiting"
+  },
+  "statusAdWatching": {
+    "message": "🎬 Watching Ad"
+  },
+  "statusRedirecting": {
+    "message": "🔄 Redirecting to BusinessClub..."
+  },
+  "labelStatus": {
+    "message": "Status"
+  },
+  "labelCountdown": {
+    "message": "Countdown"
+  },
+  "labelTotalWatched": {
+    "message": "Total Watched"
+  },
+  "btnStart": {
+    "message": "Start Automation"
+  },
+  "btnStop": {
+    "message": "Stop"
+  },
+  "btnPanelStart": {
+    "message": "▶ Start"
+  },
+  "btnPanelStop": {
+    "message": "⏸ Stop"
+  },
+  "btnResume": {
+    "message": "▶ Resume"
+  },
+  "btnRetry": {
+    "message": "🔄 Retry"
+  },
+  "panelAdCounter": {
+    "message": "Ad #${current}"
+  },
+  "normalModeLabel": {
+    "message": "Normal mode (watch full ad)"
+  },
+  "bypassLabel": {
+    "message": "API bypass (recommended)"
+  },
+  "modalCloseLabel": {
+    "message": "Modal focus-loss"
+  },
+  "modalCloseDelayLabel": {
+    "message": "Close buffer: ${ms} ms"
+  }
+}

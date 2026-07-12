@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Create extension zip
+        run: |
+          # Proje kökündeki tüm dosyaları zip'e ekle (gitignore'dakiler hariç)
+          zip -r "osm-reward-handler-v${{ steps.get_version.outputs.VERSION }}.zip" \
+            . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x ".gitignore" \
+            -x "*.zip"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "OSM Reward Handler v${{ steps.get_version.outputs.VERSION }}"
+          body: |
+            ## OSM Reward Handler v${{ steps.get_version.outputs.VERSION }}
+
+            Chrome extension for automating OSM Business Club reward videos.
+
+            ### Kurulum
+            1. Chrome'da `chrome://extensions` adresine gidin
+            2. Developer mode'u açın
+            3. İndirdiğiniz zip dosyasını sürükleyip bırakın
+          files: |
+            osm-reward-handler-v${{ steps.get_version.outputs.VERSION }}.zip
+          draft: false
+          prerelease: false

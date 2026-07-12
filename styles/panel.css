@@ -1,0 +1,113 @@
+#osm-panel{
+
+    position:fixed;
+
+    top:15px;
+
+    left:15px;
+
+    width:240px;
+
+    background:#222;
+
+    color:white;
+
+    border-radius:10px;
+
+    padding:15px;
+
+    z-index:99999999;
+
+    font-family:Arial,sans-serif;
+
+    box-shadow:0 5px 15px rgba(0,0,0,.4);
+
+}
+
+#osm-header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-bottom:15px;
+
+}
+
+#osm-title{
+
+    font-size:15px;
+
+    font-weight:bold;
+
+}
+
+#osm-version{
+
+    font-size:11px;
+
+    opacity:.6;
+
+}
+
+.osm-section{
+
+    margin-bottom:12px;
+
+}
+
+.osm-label{
+
+    font-size:12px;
+
+    opacity:.6;
+
+    margin-bottom:4px;
+
+}
+
+#osm-status{
+
+    font-weight:bold;
+
+    font-size:15px;
+
+}
+
+#osm-countdown{
+
+    font-size:20px;
+
+    font-weight:bold;
+
+    letter-spacing:1px;
+
+}
+
+#osm-toggle-btn{
+
+    width:100%;
+
+    border:none;
+
+    border-radius:6px;
+
+    padding:10px;
+
+    cursor:pointer;
+
+    font-weight:bold;
+
+    color:white;
+
+    background:#27ae60;
+
+}
+
+#osm-toggle-btn.paused{
+
+    background:#e67e22;
+
+}
