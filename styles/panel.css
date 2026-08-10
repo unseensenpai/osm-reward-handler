@@ -22,6 +22,22 @@
 
     box-shadow:0 5px 15px rgba(0,0,0,.4);
 
+    /* Panel bir kontrol yüzeyi, metin değil: seçimi ve yanıp sönen caret'i
+       kapat. Sayfa body'sinde contenteditable/designMode varsa panel bunu
+       miras alıp içinde imleç gösteriyordu. */
+    user-select:none;
+
+    -webkit-user-select:none;
+
+    caret-color:transparent;
+
+}
+
+/* Slider gerçek bir input; seçim kapalı kalsın ama tıklanabilirliği korunsun. */
+#osm-panel input[type="range"]{
+
+    pointer-events:auto;
+
 }
 
 #osm-header{
@@ -33,6 +49,523 @@
     align-items:center;
 
     margin-bottom:15px;
+
+    /* Sürükleme tutamağı: başlık çubuğu. Metin seçimi kapalı olmalı,
+       yoksa sürüklerken başlık maviye boyanıp seçiliyor. */
+    cursor:grab;
+
+    user-select:none;
+
+}
+
+#osm-panel.osm-dragging #osm-header{
+
+    cursor:grabbing;
+
+}
+
+/* Sürüklerken geçişleri kapat: yoksa panel imleci gecikmeli takip eder. */
+#osm-panel.osm-dragging{
+
+    transition:none;
+
+}
+
+#osm-collapse-btn{
+
+    background:none;
+
+    border:none;
+
+    color:#bdc3c7;
+
+    font-size:16px;
+
+    line-height:1;
+
+    padding:2px 4px;
+
+    margin-left:6px;
+
+    cursor:pointer;
+
+    border-radius:4px;
+
+    flex-shrink:0;
+
+}
+
+#osm-collapse-btn:hover{
+
+    background:rgba(255,255,255,.12);
+
+    color:#fff;
+
+}
+
+/* ==========================
+   KÜÇÜK (DOCK) HAL
+   ========================== */
+
+/* Şeride dönüşür: ~28px genişlik, sol kenara yapışır. Gövde gizlenir,
+   sadece ikon + durum noktası + genişlet oku kalır. */
+/* Küçük halde panel en yakın kenara yapışır. Kenar JS'ten data-dock ile
+   verilir (sürükleme bitince panelin merkezi hangi yarıdaysa o taraf). */
+#osm-panel.osm-collapsed{
+
+    width:28px !important;
+
+    min-width:0;
+
+    padding:8px 0 !important;
+
+    cursor:pointer;
+
+}
+
+#osm-panel.osm-collapsed[data-dock="left"]{
+
+    left:0 !important;
+
+    right:auto !important;
+
+    border-radius:0 8px 8px 0;
+
+}
+
+#osm-panel.osm-collapsed[data-dock="right"]{
+
+    left:auto !important;
+
+    right:0 !important;
+
+    border-radius:8px 0 0 8px;
+
+}
+
+#osm-panel.osm-collapsed:hover{
+
+    background:#2c2c2c;
+
+}
+
+/* Gövdenin tamamını gizle. !important şart: buton sarmalayıcıları ui.js'te
+   inline style="display:flex" ile geliyor ve inline stil normalde
+   stylesheet'i yener — bu olmadan Başlat/Durdur şeridin dışında görünür
+   kalıyor. :not(#osm-dock) dock'u kuraldan muaf tutar. */
+#osm-panel.osm-collapsed > *:not(#osm-dock){
+
+    display:none !important;
+
+}
+
+#osm-panel.osm-collapsed #osm-dock{
+
+    display:flex !important;
+
+}
+
+#osm-dock{
+
+    display:none;
+
+    flex-direction:column;
+
+    align-items:center;
+
+    gap:8px;
+
+}
+
+#osm-dock-icon{
+
+    font-size:15px;
+
+    line-height:1;
+
+}
+
+/* Durum noktası: yeşil=çalışıyor, turuncu=duraklatıldı, kırmızı=bekleme/ban,
+   gri=boşta. Renk JS'ten data-state ile verilir. */
+#osm-dock-dot{
+
+    width:8px;
+
+    height:8px;
+
+    border-radius:50%;
+
+    background:#7f8c8d;
+
+}
+
+#osm-panel[data-state="running"] #osm-dock-dot{
+
+    background:#27ae60;
+
+    box-shadow:0 0 6px #27ae60;
+
+}
+
+#osm-panel[data-state="paused"] #osm-dock-dot{
+
+    background:#e67e22;
+
+}
+
+#osm-panel[data-state="waiting"] #osm-dock-dot{
+
+    background:#e74c3c;
+
+}
+
+#osm-dock-arrow{
+
+    font-size:10px;
+
+    color:#bdc3c7;
+
+}
+
+/* Ok her zaman panelin açılacağı yönü gösterir: solda dock'luyken sağa,
+   sağda dock'luyken sola. */
+#osm-panel.osm-collapsed[data-dock="right"] #osm-dock-arrow{
+
+    transform:rotate(180deg);
+
+}
+
+/* ==========================
+   HEDEF LİSTESİ
+   ========================== */
+
+.osm-target-row{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:6px;
+
+    padding:3px 0;
+
+}
+
+.osm-target-main{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:6px;
+
+    cursor:pointer;
+
+    flex:1;
+
+    min-width:0;
+
+}
+
+.osm-target-name{
+
+    font-size:12px;
+
+    color:#bdc3c7;
+
+    white-space:nowrap;
+
+    overflow:hidden;
+
+    text-overflow:ellipsis;
+
+}
+
+/* Geri sayım: tabular-nums olmadan rakam genişliği oynayıp satır titriyor. */
+.osm-target-time{
+
+    font-size:11px;
+
+    color:#7f8c8d;
+
+    font-variant-numeric:tabular-nums;
+
+    flex-shrink:0;
+
+}
+
+.osm-target-time.osm-target-ready{
+
+    color:#27ae60;
+
+    font-weight:bold;
+
+}
+
+.osm-target-retry{
+
+    background:none;
+
+    border:none;
+
+    color:#95a5a6;
+
+    font-size:13px;
+
+    line-height:1;
+
+    padding:2px 4px;
+
+    cursor:pointer;
+
+    border-radius:4px;
+
+    flex-shrink:0;
+
+}
+
+.osm-target-retry:hover{
+
+    background:rgba(255,255,255,.12);
+
+    color:#fff;
+
+}
+
+/* Antrenman slot listesi: satır açılınca beliren alt liste. */
+.osm-target-expand{
+
+    background:none;
+
+    border:none;
+
+    color:#7f8c8d;
+
+    font-size:10px;
+
+    line-height:1;
+
+    padding:2px 3px;
+
+    cursor:pointer;
+
+    flex-shrink:0;
+
+}
+
+.osm-target-expand:hover{
+
+    color:#fff;
+
+}
+
+.osm-slot-list{
+
+    margin:2px 0 6px 16px;
+
+    padding-left:8px;
+
+    border-left:1px solid rgba(255,255,255,.15);
+
+}
+
+.osm-slot-row{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:2px 0;
+
+    cursor:pointer;
+
+}
+
+.osm-slot-name{
+
+    font-size:11px;
+
+    color:#95a5a6;
+
+    flex:1;
+
+    white-space:nowrap;
+
+    overflow:hidden;
+
+    text-overflow:ellipsis;
+
+}
+
+.osm-slot-time{
+
+    font-size:10px;
+
+    color:#7f8c8d;
+
+    font-variant-numeric:tabular-nums;
+
+    flex-shrink:0;
+
+}
+
+.osm-slot-empty{
+
+    font-size:11px;
+
+    color:#7f8c8d;
+
+    padding:3px 0;
+
+}
+
+/* Modal/normal modda API-only hedefler seçilemez. */
+.osm-target-disabled{
+
+    opacity:.4;
+
+}
+
+.osm-target-disabled .osm-target-main{
+
+    cursor:not-allowed;
+
+}
+
+/* İstek sürerken: buton döner, satır vurgulanır. Kullanıcı tıkladığını
+   ve bir şeyin çalıştığını görmeli. */
+.osm-target-active{
+
+    background:rgba(255,255,255,.06);
+
+    border-radius:4px;
+
+}
+
+.osm-spin{
+
+    animation:osm-rotate .8s linear infinite;
+
+    color:#3498db;
+
+}
+
+@keyframes osm-rotate{
+
+    from{ transform:rotate(0deg); }
+
+    to{ transform:rotate(360deg); }
+
+}
+
+.osm-result-ok{
+
+    color:#27ae60 !important;
+
+    font-weight:bold;
+
+}
+
+.osm-result-cap{
+
+    color:#e67e22 !important;
+
+}
+
+.osm-result-fail{
+
+    color:#e74c3c !important;
+
+    font-weight:bold;
+
+}
+
+/* ==========================
+   DEBUG ROZETİ
+   ========================== */
+
+#osm-debug-badge{
+
+    margin-top:10px;
+
+    padding:6px 8px;
+
+    background:#3b1f1f;
+
+    border:1px solid #8e3a3a;
+
+    border-radius:6px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    gap:6px;
+
+}
+
+#osm-debug-title{
+
+    font-size:11px;
+
+    font-weight:bold;
+
+    color:#ff8a80;
+
+    letter-spacing:.5px;
+
+}
+
+#osm-debug-actions{
+
+    display:flex;
+
+    gap:4px;
+
+}
+
+#osm-debug-actions button{
+
+    background:#5c2b2b;
+
+    border:none;
+
+    border-radius:4px;
+
+    color:#fff;
+
+    font-size:12px;
+
+    line-height:1;
+
+    padding:4px 6px;
+
+    cursor:pointer;
+
+}
+
+#osm-debug-actions button:hover{
+
+    background:#7a3a3a;
+
+}
+
+/* Kapatma ayrı dursun: yanlışlıkla temizle yerine basılmasın. */
+#osm-debug-off{
+
+    margin-left:2px;
+
+    background:#7a2b2b !important;
+
+}
+
+#osm-debug-off:hover{
+
+    background:#a33 !important;
 
 }
 

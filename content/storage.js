@@ -10,7 +10,13 @@ const Storage = {
             targetTime: null,
             adsWatched: 0,
             totalAdsWatched: 0,
-            automationStarted: false
+            automationStarted: false,
+            // Varsayılan kurulum: API bypass açık, yalnızca Business Club
+            // hedefli. Diğer hedefler günlük/sınırlı olduğu için kullanıcı
+            // bilerek açmalı.
+            bypassMode: true,
+            modalCloseMode: false,
+            enabledTargets: ["businessClub"]
         };
 
         let current = {};

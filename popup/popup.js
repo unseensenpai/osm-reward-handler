@@ -48,7 +48,20 @@ function updateUI() {
     });
 }
 
+// Sürümü manifest'ten oku: tek kaynak manifest.json olsun, popup/panel
+// sürüm bump'ında unutulup geride kalmasın.
+function showVersion() {
+    const el = document.getElementById('version');
+    if (!el) return;
+    try {
+        el.textContent = 'v' + chrome.runtime.getManifest().version;
+    } catch (e) {
+        el.textContent = '';
+    }
+}
+
 async function initPopup() {
+    showVersion();
     await I18N.ready;
     updateUI();
     document.addEventListener('i18n:changed', updateUI);

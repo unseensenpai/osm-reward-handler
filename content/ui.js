@@ -17,6 +17,14 @@ const UI = {
     delayWrap: null,
     delaySlider: null,
     delayText: null,
+    header: null,
+    collapseButton: null,
+    dock: null,
+    collapsed: false,
+    // Açık haldeki konum. Küçükken panel kenara yapıştığı için style.left
+    // ezilir; genişletince buraya geri dönülür (CSS'teki varsayılan 15/15).
+    expandedLeft: 15,
+    expandedTop: 15,
 
     async init() {
 
@@ -30,12 +38,33 @@ const UI = {
 
     },
 
+    // Sürüm manifest'ten okunur (tek kaynak). Extension context geçersizse
+    // (eklenti güncellendi/kapatıldı) boş döner, panel yine de kurulur.
+    getVersion() {
+        try {
+            return "v" + chrome.runtime.getManifest().version;
+        } catch (e) {
+            return "";
+        }
+    },
+
     createPanel() {
 
         const panel = document.createElement("div");
         panel.id = "osm-panel";
 
+        // Sayfa body'sinde contenteditable/designMode açıksa panel bunu miras
+        // alıp içinde yanıp sönen imleç gösteriyor. Açıkça kapat.
+        panel.setAttribute("contenteditable", "false");
+        panel.spellcheck = false;
+
         panel.innerHTML = `
+            <div id="osm-dock" title="${ContentI18N.t('expandTooltip')}">
+                <div id="osm-dock-icon">⚽</div>
+                <div id="osm-dock-dot"></div>
+                <div id="osm-dock-arrow">▸</div>
+            </div>
+
             <div id="osm-header">
 
                 <div id="osm-title">
@@ -43,8 +72,10 @@ const UI = {
                 </div>
 
                 <div id="osm-version">
-                    v3.2.0
+                    ${this.getVersion()}
                 </div>
+
+                <button id="osm-collapse-btn" title="${ContentI18N.t('collapseTooltip')}">◂</button>
 
             </div>
 
@@ -101,6 +132,13 @@ const UI = {
                 </div>
             </div>
 
+            <div class="osm-section" id="osm-targets-section" style="margin-top:8px;">
+                <div class="osm-label" id="osm-label-targets">
+                    ${ContentI18N.t('labelTargets')}
+                </div>
+                <div id="osm-target-list"></div>
+            </div>
+
             <button id="osm-retry-btn" style="display:none; background: #e67e22; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight:bold; margin-top: 6px; width: 100%;">
                 ${ContentI18N.t('btnRetry')}
             </button>
@@ -125,8 +163,16 @@ const UI = {
         this.delayWrap = panel.querySelector("#osm-delay-wrap");
         this.delaySlider = panel.querySelector("#osm-delay-slider");
         this.delayText = panel.querySelector("#osm-delay-text");
+        this.header = panel.querySelector("#osm-header");
+        this.collapseButton = panel.querySelector("#osm-collapse-btn");
+        this.dock = panel.querySelector("#osm-dock");
 
         this.registerEvents();
+        this.registerCollapse();
+        this.registerDrag();
+        this.restoreLayout();
+        this.buildTargetList();
+        this.startTargetCountdowns();
 
     },
 
@@ -139,6 +185,13 @@ const UI = {
         if (this.bypassText) this.bypassText.textContent = ContentI18N.t('bypassLabel');
         if (this.modalCloseText) this.modalCloseText.textContent = ContentI18N.t('modalCloseLabel');
         if (this.delaySlider) this.setDelayText(Number(this.delaySlider.value));
+        if (this.collapseButton) this.collapseButton.title = ContentI18N.t('collapseTooltip');
+        if (this.dock) this.dock.title = ContentI18N.t('expandTooltip');
+
+        const targetsLabel = this.panel && this.panel.querySelector("#osm-label-targets");
+        if (targetsLabel) targetsLabel.textContent = ContentI18N.t('labelTargets');
+        // Hedef adları ve tooltip'ler dile bağlı; listeyi yeniden kur.
+        this.buildTargetList();
 
         if (this.currentStatusKey) {
             this.status.textContent = ContentI18N.t(this.currentStatusKey);
@@ -213,10 +266,14 @@ const UI = {
             const enabled = this.bypassCheck.checked;
             if (enabled) {
                 this.modalCloseCheck.checked = false;
+                // checked'i elle değiştirmek change olayını TETİKLEMEZ; slider
+                // modal moduna ait olduğu için burada açıkça gizlenmeli.
+                this.toggleDelaySlider(false);
                 await Storage.set({ bypassMode: true, modalCloseMode: false });
             } else {
                 await Storage.set({ bypassMode: false });
             }
+            this.syncTargetAvailability();
         });
 
         this.modalCloseCheck.addEventListener("change", async () => {
@@ -228,6 +285,9 @@ const UI = {
                 await Storage.set({ modalCloseMode: false });
             }
             this.toggleDelaySlider(enabled);
+            // Modal/normal modlar sayfa DOM'una bağlı ve yalnızca
+            // BusinessClub'ın modalı var; diğer hedefler API-only.
+            this.syncTargetAvailability();
         });
 
         // Slider: canlı ms değerini göster ve storage'a yaz. "input" her
@@ -250,6 +310,505 @@ const UI = {
 
     },
 
+    // ======================
+    // HEDEF LİSTESİ
+    // ======================
+
+    // Her hedef bir satır: seçim kutusu, ad, kendi geri sayımı ve kendi
+    // "şimdi dene" butonu. Geri sayımlar timers endpoint'inden beslenir
+    // (TargetTimers), her hedefin süresi ayrıdır.
+    buildTargetList() {
+        const list = this.panel && this.panel.querySelector("#osm-target-list");
+        if (!list || typeof Targets === "undefined") return;
+
+        list.innerHTML = "";
+
+        for (const target of Targets.all()) {
+            const row = document.createElement("div");
+            row.className = "osm-target-row";
+            row.dataset.target = target.key;
+
+            // Antrenman'da 5 slot var; kullanıcı hangilerinin kısaltılacağını
+            // seçebilsin diye satır açılır-kapanır yapılır.
+            // ▸/▾ bazı sistem fontlarında yok ve tire gibi görünüyor;
+            // ▶/▼ her yerde render ediliyor.
+            const expander = target.needsSession
+                ? `<button class="osm-target-expand" title="${ContentI18N.t('targetSlotsTooltip')}">▶</button>`
+                : "";
+
+            row.innerHTML = `
+                <label class="osm-target-main">
+                    <input type="checkbox" class="osm-target-check" data-target="${target.key}">
+                    <span class="osm-target-name">${ContentI18N.t(target.labelKey)}</span>
+                </label>
+                <span class="osm-target-time">--:--:--</span>
+                <button class="osm-target-retry" title="${ContentI18N.t('targetRetryTooltip')}">↻</button>
+                ${expander}
+            `;
+
+            list.appendChild(row);
+
+            if (target.needsSession) {
+                const slots = document.createElement("div");
+                slots.className = "osm-slot-list";
+                slots.dataset.for = target.key;
+                slots.style.display = "none";
+                list.appendChild(slots);
+            }
+        }
+
+        this.registerTargetEvents();
+        this.restoreTargetSelection();
+
+        // Dil değişiminde liste sıfırdan kuruluyor; açık olan slot listesi
+        // kapalı görünmesin diye durum geri yüklenir.
+        if (this._slotsOpen) {
+            const slots = list.querySelector('.osm-slot-list[data-for="training"]');
+            const exp = list.querySelector('.osm-target-row[data-target="training"] .osm-target-expand');
+            if (slots) slots.style.display = "block";
+            if (exp) exp.textContent = "▼";
+            this.renderSlots();
+        }
+    },
+
+    registerTargetEvents() {
+        const list = this.panel.querySelector("#osm-target-list");
+        if (!list) return;
+
+        // buildTargetList dil değişiminde yeniden çağrılıyor ve dinleyiciler
+        // aynı #osm-target-list elemanına bağlanıyor: her çağrıda bir kat daha
+        // birikip tek tıklamayı birden çok kez işliyorlardı (açılan slot
+        // listesi hemen kapanıyordu). Bir kez bağla.
+        if (this._targetEventsBound) return;
+        this._targetEventsBound = true;
+
+        list.addEventListener("change", async (e) => {
+            const box = e.target.closest(".osm-target-check");
+            if (!box) return;
+            await this.saveTargetSelection();
+        });
+
+        // Satır başına "şimdi dene": o hedefin beklemesini iptal edip sıradaki
+        // turda öne almasını ister. Her hedefin tıklaması farklı çalışır.
+        list.addEventListener("click", async (e) => {
+            const btn = e.target.closest(".osm-target-retry");
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const row = btn.closest(".osm-target-row");
+            const key = row && row.dataset.target;
+            if (!key) return;
+
+            // Aynı hedefe üst üste basılmasın: sonuç gelene kadar kilitli.
+            if (btn.dataset.busy === "1") return;
+
+            this.setTargetBusy(key, true);
+            Logger.info(`${key}: elle tetiklendi.`);
+            document.dispatchEvent(new CustomEvent("osm:retryTarget", { detail: { key } }));
+        });
+
+        // Otomasyon sonucu bildirir; buton buna göre ✓ / ✕ gösterir.
+        document.addEventListener("osm:targetResult", (e) => {
+            const { key, ok, reason } = e.detail || {};
+            this.setTargetBusy(key, false);
+            this.flashTargetResult(key, ok, reason);
+        });
+
+        // Antrenman slotlarını aç/kapa.
+        list.addEventListener("click", async (e) => {
+            const exp = e.target.closest(".osm-target-expand");
+            if (!exp) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const row = exp.closest(".osm-target-row");
+            const key = row && row.dataset.target;
+            const slots = list.querySelector(`.osm-slot-list[data-for="${key}"]`);
+            if (!slots) return;
+
+            const open = slots.style.display !== "none";
+            slots.style.display = open ? "none" : "block";
+            exp.textContent = open ? "▶" : "▼";
+            this._slotsOpen = !open;
+
+            // İlk açılışta slotlar henüz bilinmiyor olabilir.
+            if (!open && TargetContext.sessionDetails.length === 0) {
+                slots.innerHTML = `<div class="osm-slot-empty">${ContentI18N.t('slotsLoading')}</div>`;
+                await TargetContext.refreshTrainingSessions();
+            }
+            this.renderSlots();
+        });
+
+        // Slot seçimi değişti.
+        list.addEventListener("change", async (e) => {
+            const box = e.target.closest(".osm-slot-check");
+            if (!box) return;
+
+            const checked = [...this.panel.querySelectorAll(".osm-slot-check")]
+                .filter(b => b.checked)
+                .map(b => b.dataset.session);
+
+            await TargetContext.setSelectedSessions(checked);
+            Logger.info(`Antrenman slotları seçildi: ${checked.length || "hepsi"}`);
+        });
+
+        document.addEventListener("osm:sessionsUpdated", () => this.renderSlots());
+    },
+
+    // Antrenman slot listesini doldurur. Seçim boşsa hepsi işaretli görünür
+    // (varsayılan davranış "hepsi arasında sırayla").
+    renderSlots() {
+        if (!this.panel || typeof TargetContext === "undefined") return;
+
+        const box = this.panel.querySelector('.osm-slot-list[data-for="training"]');
+        if (!box || box.style.display === "none") return;
+
+        const details = TargetContext.sessionDetails || [];
+        if (details.length === 0) {
+            box.innerHTML = `<div class="osm-slot-empty">${ContentI18N.t('slotsEmpty')}</div>`;
+            return;
+        }
+
+        const selected = TargetContext.selectedSessions;
+        const allMode = selected.length === 0;
+
+        box.innerHTML = details.map(d => {
+            const checked = allMode || selected.includes(d.id) ? "checked" : "";
+            const ms = d.finishedTimestamp
+                ? Math.max(0, d.finishedTimestamp * 1000 - Date.now())
+                : null;
+            // Süresi dolan antrenman kısaltılamaz; oyuncuyu toplamak gerekir.
+            const left = ms === null
+                ? "--:--:--"
+                : (ms <= 0 ? ContentI18N.t('targetReady') : this.formatCountdown(ms));
+            // Oyuncu adı slotu ayırt etmeye yarıyor (aynı tip iki kez olabilir).
+            const who = d.player ? ` · ${d.player}` : "";
+            return `
+                <label class="osm-slot-row">
+                    <input type="checkbox" class="osm-slot-check" data-session="${d.id}" ${checked}>
+                    <span class="osm-slot-name" title="${d.title}${who}">${d.title}</span>
+                    <span class="osm-slot-time">${left}</span>
+                </label>
+            `;
+        }).join("");
+    },
+
+    // API bypass kapalıyken yalnızca Business Club seçilebilir: Normal ve
+    // Modal odak kaybı modları sayfadaki reklam modalını kullanıyor, o modal
+    // da sadece BusinessClub'da var. Diğer satırlar devre dışı bırakılır.
+    syncTargetAvailability() {
+        if (!this.panel) return;
+
+        const apiOnly = !(this.bypassCheck && this.bypassCheck.checked);
+        let changed = false;
+
+        this.panel.querySelectorAll(".osm-target-row").forEach(row => {
+            const key = row.dataset.target;
+            const box = row.querySelector(".osm-target-check");
+            const btn = row.querySelector(".osm-target-retry");
+            if (!box) return;
+
+            const target = typeof Targets !== "undefined" ? Targets.get(key) : null;
+            const blocked = apiOnly && !(target && target.supportsModal);
+
+            const exp = row.querySelector(".osm-target-expand");
+
+            box.disabled = blocked;
+            if (btn) btn.disabled = blocked;
+            if (exp) exp.disabled = blocked;
+            row.classList.toggle("osm-target-disabled", blocked);
+
+            // Hedef kapanıyorsa açık slot listesi de kapansın.
+            if (blocked && this._slotsOpen && key === "training") {
+                const slots = this.panel.querySelector('.osm-slot-list[data-for="training"]');
+                if (slots) slots.style.display = "none";
+                if (exp) exp.textContent = "▶";
+                this._slotsOpen = false;
+            }
+
+            if (blocked && box.checked) {
+                box.checked = false;
+                changed = true;
+            }
+            if (apiOnly && target && target.supportsModal && !box.checked) {
+                box.checked = true;   // BC tek seçenek: boşta kalmasın
+                changed = true;
+            }
+        });
+
+        if (changed) this.saveTargetSelection();
+    },
+
+    // Butonu "çalışıyor" durumuna alır: dönen ikon + kilit. Kullanıcı
+    // tıkladığını ve isteğin sürdüğünü görsün.
+    setTargetBusy(key, busy) {
+        const row = this.panel && this.panel.querySelector(`.osm-target-row[data-target="${key}"]`);
+        if (!row) return;
+
+        const btn = row.querySelector(".osm-target-retry");
+        if (!btn) return;
+
+        if (busy) {
+            btn.dataset.busy = "1";
+            btn.classList.add("osm-spin");
+            btn.textContent = "↻";
+            row.classList.add("osm-target-active");
+        } else {
+            delete btn.dataset.busy;
+            btn.classList.remove("osm-spin");
+            row.classList.remove("osm-target-active");
+        }
+    },
+
+    // Sonucu kısa süre gösterir: ✓ başarı, ✕ hata, ⏳ cap dolu.
+    flashTargetResult(key, ok, reason) {
+        const row = this.panel && this.panel.querySelector(`.osm-target-row[data-target="${key}"]`);
+        if (!row) return;
+
+        const btn = row.querySelector(".osm-target-retry");
+        if (!btn) return;
+
+        const marks = { ok: "✓", cap: "⏳", fail: "✕" };
+        const state = ok ? "ok" : (reason === "cap" ? "cap" : "fail");
+
+        btn.textContent = marks[state];
+        btn.classList.add(`osm-result-${state}`);
+
+        if (this._resultTimers && this._resultTimers[key]) {
+            clearTimeout(this._resultTimers[key]);
+        }
+        this._resultTimers = this._resultTimers || {};
+
+        this._resultTimers[key] = setTimeout(() => {
+            btn.textContent = "↻";
+            btn.classList.remove("osm-result-ok", "osm-result-cap", "osm-result-fail");
+        }, 2500);
+    },
+
+    async saveTargetSelection() {
+        const boxes = this.panel.querySelectorAll(".osm-target-check");
+        const keys = [];
+        boxes.forEach(b => { if (b.checked) keys.push(b.dataset.target); });
+        await Storage.set({ enabledTargets: keys });
+        Logger.info(`Hedefler: ${keys.join(", ") || "(yok)"}`);
+    },
+
+    async restoreTargetSelection() {
+        const s = await Storage.get(["enabledTargets"]);
+        // Varsayılan: yalnızca BusinessClub.
+        const keys = Array.isArray(s.enabledTargets) ? s.enabledTargets : ["businessClub"];
+        this.panel.querySelectorAll(".osm-target-check").forEach(b => {
+            b.checked = keys.includes(b.dataset.target);
+        });
+        this.syncTargetAvailability();
+    },
+
+    // Geri sayımları saniyede bir tazele. Süreler TargetTimers'ta sunucu
+    // zaman damgasına göre tutulur; burada sadece gösterim yapılır.
+    startTargetCountdowns() {
+        if (this.targetTicker) clearInterval(this.targetTicker);
+
+        const tick = () => {
+            if (typeof TargetTimers === "undefined" || !this.panel) return;
+
+            let soonest = null;   // seçili hedefler arasında en küçük süre
+
+            this.panel.querySelectorAll(".osm-target-row").forEach(row => {
+                const key = row.dataset.target;
+                const cell = row.querySelector(".osm-target-time");
+                if (!cell) return;
+
+                const ms = TargetTimers.msLeft(key);
+                if (ms === null) {
+                    cell.textContent = "--:--:--";
+                    cell.title = "";
+                    cell.classList.remove("osm-target-ready");
+                } else if (ms <= 0) {
+                    cell.textContent = ContentI18N.t('targetReady');
+                    cell.title = "";
+                    cell.classList.add("osm-target-ready");
+                } else {
+                    cell.textContent = this.formatCountdown(ms);
+                    // Satırdaki süre reklam hakkının açılmasını (cap) gösterir;
+                    // alt slotlardaki süreler antrenmanın kendi bitişidir. Yan
+                    // yana durunca karışıyor, tooltip ayırt etsin.
+                    cell.title = TargetTimers.capUntil[key]
+                        ? ContentI18N.t('tooltipAdCap')
+                        : ContentI18N.t('tooltipFinish');
+                    cell.classList.remove("osm-target-ready");
+                }
+
+                // Üstteki büyük sayaç, seçili hedeflerin EN KÜÇÜĞÜNÜ gösterir:
+                // "bir sonraki fırsat ne zaman" sorusunun cevabı bu.
+                const box = row.querySelector(".osm-target-check");
+                if (box && box.checked && ms !== null && ms > 0) {
+                    if (soonest === null || ms < soonest) soonest = ms;
+                }
+            });
+
+            // Ban sayacı (Timer.resume) önceliklidir; o çalışıyorsa dokunma.
+            // Aksi halde üst sayaç satırlardaki EN KÜÇÜK süreyi gösterir.
+            if (soonest !== null && !this.banCountdownActive) {
+                this.setCountdown(this.formatCountdown(soonest));
+            }
+
+            // Açık slot listesindeki süreler de aksın.
+            this.panel.querySelectorAll(".osm-slot-row").forEach(r => {
+                const id = r.querySelector(".osm-slot-check")?.dataset.session;
+                const cell = r.querySelector(".osm-slot-time");
+                if (!id || !cell) return;
+                const d = (TargetContext.sessionDetails || []).find(x => x.id === id);
+                if (!d || !d.finishedTimestamp) return;
+                cell.textContent = this.formatCountdown(
+                    Math.max(0, d.finishedTimestamp * 1000 - Date.now())
+                );
+            });
+        };
+
+        tick();
+        this.targetTicker = setInterval(tick, 1000);
+    },
+
+    // ======================
+    // KÜÇÜLTME (DOCK)
+    // ======================
+
+    // Küçültme butonu paneli daraltır; şeride tıklamak geri açar. Şerit
+    // sol kenara yapışır (CSS left:0 !important) — sürüklenmiş konum
+    // korunur, genişletilince aynı yere döner.
+    registerCollapse() {
+        if (this.collapseButton) {
+            this.collapseButton.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.setCollapsed(true);
+            });
+        }
+
+        if (this.dock) {
+            this.dock.addEventListener("click", () => this.setCollapsed(false));
+        }
+    },
+
+    async setCollapsed(collapsed, persist = true) {
+        if (!this.panel) return;
+
+        // Küçülürken kenarı seç; büyürken sürüklenmiş konuma geri dön.
+        // data-dock CSS'te left:0/right:0 ve köşe yuvarlaklığını belirler.
+        if (collapsed) {
+            this.panel.dataset.dock = this.nearestEdge();
+        } else {
+            this.panel.style.left = this.expandedLeft + "px";
+            this.panel.style.top = this.expandedTop + "px";
+        }
+
+        this.collapsed = collapsed;
+        this.panel.classList.toggle("osm-collapsed", collapsed);
+
+        if (persist) {
+            await Storage.set({ panelCollapsed: collapsed });
+        }
+    },
+
+    // Panelin merkezi ekranın hangi yarısındaysa o kenar. Küçültme anında
+    // ölçülür; sürükleyip sağa götürdüysen sağa dock olur.
+    nearestEdge() {
+        const rect = this.panel.getBoundingClientRect();
+        const center = rect.left + rect.width / 2;
+        return center > window.innerWidth / 2 ? "right" : "left";
+    },
+
+    // ======================
+    // SÜRÜKLEME
+    // ======================
+
+    // Başlıktan tut-sürükle. Konum storage'a yazılır, sayfa yenilenince aynı
+    // yerde açılır. Küçültme butonuna basarken sürükleme başlamasın diye
+    // buton hedefi dışlanır.
+    registerDrag() {
+        if (!this.panel || !this.header) return;
+
+        let startX = 0, startY = 0, originLeft = 0, originTop = 0, moved = false;
+
+        const onMouseMove = (e) => {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+
+            if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+            moved = true;
+
+            const { left, top } = this.clampToViewport(originLeft + dx, originTop + dy);
+            this.panel.style.left = left + "px";
+            this.panel.style.top = top + "px";
+        };
+
+        const onMouseUp = async () => {
+            document.removeEventListener("mousemove", onMouseMove);
+            document.removeEventListener("mouseup", onMouseUp);
+            this.panel.classList.remove("osm-dragging");
+
+            if (!moved) return;
+
+            this.expandedLeft = parseInt(this.panel.style.left, 10);
+            this.expandedTop = parseInt(this.panel.style.top, 10);
+
+            await Storage.set({
+                panelLeft: this.expandedLeft,
+                panelTop: this.expandedTop
+            });
+        };
+
+        this.header.addEventListener("mousedown", (e) => {
+            if (e.button !== 0) return;
+            if (e.target.closest("#osm-collapse-btn")) return;
+
+            const rect = this.panel.getBoundingClientRect();
+            startX = e.clientX;
+            startY = e.clientY;
+            originLeft = rect.left;
+            originTop = rect.top;
+            moved = false;
+
+            this.panel.classList.add("osm-dragging");
+            document.addEventListener("mousemove", onMouseMove);
+            document.addEventListener("mouseup", onMouseUp);
+
+            e.preventDefault();
+        });
+    },
+
+    // Paneli görünür alanda tutar; ekran dışına sürüklenip kaybolmasın.
+    clampToViewport(left, top) {
+        const rect = this.panel.getBoundingClientRect();
+        const maxLeft = Math.max(0, window.innerWidth - rect.width);
+        const maxTop = Math.max(0, window.innerHeight - rect.height);
+
+        return {
+            left: Math.min(Math.max(0, left), maxLeft),
+            top: Math.min(Math.max(0, top), maxTop)
+        };
+    },
+
+    // Kayıtlı konum ve küçültme durumunu geri yükler. Pencere küçüldüyse
+    // kayıtlı konum ekran dışında kalabilir; clamp ile içeri çekilir.
+    async restoreLayout() {
+        const data = await Storage.get(["panelCollapsed", "panelLeft", "panelTop"]);
+
+        if (Number.isFinite(data.panelLeft) && Number.isFinite(data.panelTop)) {
+            const { left, top } = this.clampToViewport(data.panelLeft, data.panelTop);
+            this.panel.style.left = left + "px";
+            this.panel.style.top = top + "px";
+            this.expandedLeft = left;
+            this.expandedTop = top;
+        }
+
+        // Kenar, açık haldeki konuma göre seçilir; panel şu an küçük olsa bile
+        // nearestEdge doğru ölçsün diye sınıf sonradan eklenir.
+        if (data.panelCollapsed) {
+            this.setCollapsed(true, false);
+        }
+    },
+
     // Slider'ı yalnızca Modal Odak Kaybı modu seçiliyken göster (delay sadece
     // o modda anlamlı).
     toggleDelaySlider(show) {
@@ -266,6 +825,10 @@ const UI = {
     redirectToBusinessClubIfNeeded() {
         const isBusinessClub = window.location.href.toLowerCase().includes("businessclub");
         if (isBusinessClub) return false;
+
+        // API bypass doğrudan API'ye gidiyor; sayfa fark etmez, yönlendirme
+        // kullanıcıyı boş yere Training/Scout'tan koparır.
+        if (this.bypassCheck && this.bypassCheck.checked) return false;
 
         Logger.info("BusinessClub sayfasında değil, yönlendiriliyor...");
         this.setStatus("statusRedirecting");
@@ -309,6 +872,10 @@ const UI = {
         if (this.countdownInterval)
             clearInterval(this.countdownInterval);
 
+        // Ban geri sayımı üst sayacı sahiplenir; hedef satırlarından beslenen
+        // tick bu sırada araya girmemeli.
+        this.banCountdownActive = true;
+
         const targetTime = Date.now() + (minutes * 60 * 1000);
 
         this.countdownInterval = setInterval(() => {
@@ -319,6 +886,7 @@ const UI = {
 
                 clearInterval(this.countdownInterval);
                 this.countdownInterval = null;
+                this.banCountdownActive = false;
                 this.setCountdown("00:00:00");
                 return;
 
@@ -355,7 +923,26 @@ const UI = {
 
         this.currentStatusKey = key;
         this.status.textContent = ContentI18N.t(key);
+        this.syncDockState(key);
 
+    },
+
+    // Durum anahtarını dock noktasının rengine çevirir (CSS data-state ile
+    // boyar). Panel küçükken tek görünen bilgi bu olduğu için her setStatus'ta
+    // güncellenir.
+    syncDockState(key) {
+        if (!this.panel) return;
+
+        const states = {
+            statusRunning: "running",
+            statusAdWatching: "running",
+            statusRedirecting: "running",
+            statusPaused: "paused",
+            statusIdle: "paused",
+            statusWaiting: "waiting"
+        };
+
+        this.panel.dataset.state = states[key] || "idle";
     },
 
     setAdCounter(current) {

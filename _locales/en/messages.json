@@ -76,5 +76,47 @@
   },
   "modalCloseDelayLabel": {
     "message": "Close buffer: ${ms} ms"
+  },
+  "labelTargets": {
+    "message": "Targets"
+  },
+  "targetBusinessClub": {
+    "message": "Business Club"
+  },
+  "targetSavings": {
+    "message": "Savings"
+  },
+  "targetTraining": {
+    "message": "Training"
+  },
+  "targetScout": {
+    "message": "Scout"
+  },
+  "targetRetryTooltip": {
+    "message": "Try this target now"
+  },
+  "targetReady": {
+    "message": "Ready"
+  },
+  "targetSlotsTooltip": {
+    "message": "Choose which trainers to speed up"
+  },
+  "slotsLoading": {
+    "message": "Loading training sessions..."
+  },
+  "slotsEmpty": {
+    "message": "No active training found"
+  },
+  "tooltipAdCap": {
+    "message": "Time until next ad is available"
+  },
+  "tooltipFinish": {
+    "message": "Time until it finishes"
+  },
+  "collapseTooltip": {
+    "message": "Collapse panel"
+  },
+  "expandTooltip": {
+    "message": "Expand panel"
   }
 }

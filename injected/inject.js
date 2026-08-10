@@ -87,6 +87,12 @@
             if (init && init.headers) captureBearer(readAuth(init.headers));
             const req = args[0];
             if (req && typeof req === "object" && req.headers) captureBearer(readAuth(req.headers));
+
+            postApiRequest(
+                String(args[0]?.url ?? args[0] ?? ""),
+                init?.method || args[0]?.method || "GET",
+                init?.body
+            );
         } catch (e) {}
         const response = await originalFetch(...args);
         try {
@@ -111,6 +117,7 @@
 
     XMLHttpRequest.prototype.open = function(method, url) {
         this.__osmUrl = url;
+        this.__osmMethod = method;
         return open.apply(this, arguments);
     };
 
@@ -121,7 +128,10 @@
         return setRequestHeader.apply(this, arguments);
     };
 
-    XMLHttpRequest.prototype.send = function() {
+    XMLHttpRequest.prototype.send = function(body) {
+        try {
+            postApiRequest(this.__osmUrl, this.__osmMethod, body);
+        } catch (e) {}
         this.addEventListener("load", function() {
             try {
                 postApiResponse(this.__osmUrl, this.responseText);
@@ -147,11 +157,23 @@
         }, "*");
     }
 
+    // Giden isteğin gövdesini yayınla. Debug modu bunu yanıtla eşleştirip
+    // actionId gibi parametreleri kaydeder; yanıt tek başına isteği anlatmıyor.
+    function postApiRequest(url, method, body) {
+        if (typeof url !== "string" || !/onlinesoccermanager\.com\/api\//i.test(url)) return;
+        window.postMessage({
+            type: "OSM_API_REQUEST",
+            url: url,
+            method: method || "GET",
+            body: typeof body === "string" ? body : null
+        }, "*");
+    }
+
     // ======================
     // API HELPER
     // ======================
 
-    async function osmApiCall(endpoint, body) {
+    async function osmApiCall(endpoint, body, method = "POST") {
         // HAR kanıtı: gerçek istekler kimliği "authorization: Bearer <JWT>" ile
         // taşıyor, cookie ile DEĞİL. Eski kod credentials:"include" (cookie) ile
         // çağırdığı için API 401 dönüyordu. Doğrusu: yakalanan token'ı Bearer
@@ -173,21 +195,27 @@
             return { ok: false, status: 401, text: null, error: "no_token" };
         }
 
+        const isGet = String(method).toUpperCase() === "GET";
+
         const headers = {
             "accept": "application/json; charset=utf-8",
-            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "appversion": "3.253.0",
+            "appversion": "3.254.0",
             "platformid": "11",
             "authorization": "Bearer " + token
         };
+
+        // GET'te gövde ve content-type gönderilmez; bazı uçlar buna 400 döner.
+        if (!isGet) {
+            headers["content-type"] = "application/x-www-form-urlencoded; charset=UTF-8";
+        }
 
         try {
             // originalFetch: kendi hook'umuzu tetikleyip sahte OSM_API_RESPONSE
             // mesajı üretmesin diye ham fetch kullanılır.
             const response = await originalFetch(endpoint, {
-                method: "POST",
+                method: isGet ? "GET" : method,
                 headers: headers,
-                body: body,
+                body: isGet ? undefined : body,
                 mode: "cors"
             });
             const text = await response.text();
@@ -230,10 +258,10 @@
 
     window.addEventListener("message", async (e) => {
         if (e.data && e.data.type === API_CALL) {
-            const { endpoint, body, id } = e.data;
+            const { endpoint, body, id, method } = e.data;
             if (!endpoint) return;
 
-            const result = await osmApiCall(endpoint, body);
+            const result = await osmApiCall(endpoint, body, method);
             window.postMessage({
                 type: API_RESPONSE,
                 body: result.text,
@@ -242,6 +270,108 @@
                 callId: id
             }, "*");
         }
+    });
+
+    // ======================
+    // DEBUG: VIEWMODEL KEŞFİ
+    // ======================
+    // İstek logu, ödül alındıktan sonra EKRANI kimin güncellediğini göstermez.
+    // API bypass'ta o çağrıyı biz yapmak zorundayız (BusinessClub'da
+    // updateWallet böyle bulundu). Burada sayfanın kendi viewModel
+    // fonksiyonları sarmalanır: kullanıcı reklamı elle izlerken sayfa hangi
+    // fonksiyonu çağırıyorsa adı ve argümanı kaydedilir.
+
+    let vmTraceInstalled = false;
+
+    function traceViewModel() {
+        if (vmTraceInstalled) return { ok: false, reason: "already_installed" };
+        if (typeof appViewModel === "undefined") return { ok: false, reason: "no_viewmodel" };
+
+        const wrapped = [];
+        // Desen geniş tutulur: ilk denemede /^(update|refresh|...)/ ile sadece
+        // 4 countdown observable'ı yakalandı, Training sayfasının kendi
+        // partial'ı kaçtı. Ekranı tazeleyen fonksiyon "onRewardConsumed",
+        // "handleX", "bindY", "initZ" gibi de adlandırılabiliyor.
+        const NAME = /^(update|refresh|reload|load|set|apply|consume|claim|complete|on[A-Z]|handle|bind|init|fetch|get|show|render|populate|sync)/;
+        const SKIP = /^(getElement|getComputed|getAttribute|getContext)/;
+
+        const seen = new WeakSet();
+        const MAX_DEPTH = 4;
+
+        const wrap = (obj, objPath, depth) => {
+            if (!obj || depth > MAX_DEPTH) return;
+            if (seen.has(obj)) return;   // döngüsel referans koruması
+            seen.add(obj);
+
+            let keys = [];
+            try { keys = Object.keys(obj); } catch (e) { return; }
+            if (keys.length > 300) return;   // devasa nesnelerde boğulma
+
+            for (const key of keys) {
+                let value;
+                try { value = obj[key]; } catch (e) { continue; }
+
+                // Knockout observable: çağırıp içindeki nesneye in.
+                if (typeof value === "function" && value.length === 0 && depth < MAX_DEPTH) {
+                    let inner;
+                    try { inner = value(); } catch (e) { inner = null; }
+                    if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+                        wrap(inner, objPath + key + "().", depth + 1);
+                    }
+                }
+
+                // Düz nesne alanlarına da in (partial'lar observable olmayabilir).
+                if (value && typeof value === "object" && !Array.isArray(value) && depth < MAX_DEPTH) {
+                    wrap(value, objPath + key + ".", depth + 1);
+                }
+
+                if (typeof value !== "function" || !NAME.test(key) || SKIP.test(key)) continue;
+                if (value.__osmTraced) continue;
+
+                const original = value;
+                const fullName = objPath + key;
+
+                const proxy = function (...args) {
+                    try {
+                        window.postMessage({
+                            type: "OSM_VM_CALL",
+                            name: fullName,
+                            args: args.map(a => {
+                                try {
+                                    if (a === null || a === undefined) return String(a);
+                                    if (typeof a === "object") return JSON.stringify(a).slice(0, 600);
+                                    return String(a).slice(0, 200);
+                                } catch (e) { return "[serialize hatası]"; }
+                            })
+                        }, "*");
+                    } catch (e) {}
+                    return original.apply(this, args);
+                };
+                proxy.__osmTraced = true;
+
+                try {
+                    obj[key] = proxy;
+                    wrapped.push(fullName);
+                } catch (e) {}
+            }
+        };
+
+        try {
+            wrap(appViewModel, "appViewModel.", 0);
+        } catch (e) {
+            return { ok: false, reason: e.message };
+        }
+
+        vmTraceInstalled = true;
+        console.log("[OSM] viewModel izleme kuruldu, " + wrapped.length + " fonksiyon:", wrapped);
+        return { ok: true, wrapped: wrapped };
+    }
+
+    // Content script "izlemeyi kur" derse kur ve sonucu geri bildir.
+    window.addEventListener("message", (e) => {
+        if (!e.data || e.data.type !== "__OSM_TRACE_VM") return;
+        const result = traceViewModel();
+        window.postMessage({ type: "OSM_VM_TRACE_READY", result: result }, "*");
     });
 
     // ======================

@@ -1,30 +1,54 @@
 # ⚽ OSM Reward Handler
-![Popup Screenshot](assets/OSM_Reward_Handler_v2.4.2_Tool.png)
-![Panel Screenshot](assets/OSM_Reward_Handler_v2.4.2_UI.png)
+![Popup Screenshot](assets/OSM_Reward_Handler_v3.4.0_Tool.png)
+![Panel Screenshot](assets/OSM_Reward_Handler_v3.4.0_UI.png)
 
-**English:** Online Soccer Manager Business Club ad reward automation.
+**English:** Online Soccer Manager ad reward automation — Business Club, Savings, Training and Scout.
 
-**Türkçe:** Online Soccer Manager Business Club sayfasındaki reklam ödülü otomasyonu.
+**Türkçe:** Online Soccer Manager reklam ödülü otomasyonu — Business Club, Birikimler, Antrenman ve Yetenek Avcısı.
 
 ---
 
 ## Features / Özellikler
 
 **English:**
-- Three selectable modes (see below)
+- **Four reward targets** in one run (see below); limited ones first, Business Club last
 - Direct API reward flow (`start → watched → consumereward`) with live wallet update
-- Automatic BusinessClub redirect on start
+- Per-target countdowns and a "try now" button on each row
+- Training slot selection: choose which trainers get sped up (round-robin)
+- Collapsible panel that docks to the nearest screen edge, draggable, position remembered
 - Cooldown / ban management with persistent countdown timer
+- Debug mode for diagnostics (type `osmdbg`)
 - In-game control panel + Chrome popup interface
 - Turkish / English language support
 
 **Türkçe:**
-- Üç seçilebilir mod (aşağıya bakın)
+- **Dört ödül hedefi** tek çalıştırmada (aşağıya bakın); sınırlı olanlar önce, Business Club sona
 - Doğrudan API ödül akışı (`start → watched → consumereward`) ve canlı cüzdan güncellemesi
-- Başlatınca otomatik BusinessClub yönlendirmesi
+- Hedef başına geri sayım ve her satırda "şimdi dene" butonu
+- Antrenman slot seçimi: hangi antrenörlerin kısaltılacağını seç (sırayla)
+- Küçültülebilir panel: en yakın kenara yapışır, sürüklenebilir, konumu hatırlanır
 - Cooldown / ban yönetimi ve kalıcı geri sayım
+- Teşhis için debug modu (`osmdbg` yazın)
 - Oyun içi kontrol paneli + Chrome popup arayüzü
 - Türkçe / İngilizce dil desteği
+
+---
+
+## Targets / Hedefler
+
+**English:** All four run through the API bypass mode. Only Business Club also
+supports the modal/normal (DOM-based) modes, because it is the only one with an
+in-page reward modal.
+
+**Türkçe:** Dördü de API bypass modunda çalışır. Modal/normal (DOM tabanlı)
+modları yalnızca Business Club destekler — sayfa içi ödül modalı olan tek hedef odur.
+
+| Target / Hedef | actionId | Limit |
+|---|---|---|
+| Business Club | `BusinessClub` | Hourly cap / Saatlik cap |
+| Savings / Birikimler | `Multistep1..3` | 3 per day / Günde 3 |
+| Training / Antrenman | `TrainingTimer` | Cap-based, −2h per ad / Cap'e bağlı, reklam başına −2 saat |
+| Scout / Yetenek Avcısı | `ScoutTimer` | Cap-based, −2h per ad / Cap'e bağlı, reklam başına −2 saat |
 
 ---
 
@@ -44,9 +68,9 @@
 
 ## Screenshots / Ekran Görüntüleri
 
-| Popup UI (v2.4.2) | In-Game Panel (v2.4.2) |
+| Popup UI (v3.4.0) | In-Game Panel (v3.4.0) |
 |--------------------|------------------------|
-| ![Popup](assets/OSM_Reward_Handler_v2.4.2_Tool.png) | ![Panel](assets/OSM_Reward_Handler_v2.4.2_UI.png) |
+| ![Popup](assets/OSM_Reward_Handler_v3.4.0_Tool.png) | ![Panel](assets/OSM_Reward_Handler_v3.4.0_UI.png) |
 
 ---
 
@@ -127,8 +151,8 @@
 ├── styles/
 │   └── panel.css
 └── assets/
-    ├── OSM_Reward_Handler_v2.4.2_Tool.png
-    └── OSM_Reward_Handler_v2.4.2_UI.png
+    ├── OSM_Reward_Handler_v3.4.0_Tool.png
+    └── OSM_Reward_Handler_v3.4.0_UI.png
 ```
 
 ---

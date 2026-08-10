@@ -37,6 +37,12 @@ if (typeof IframeHandler !== "undefined") {
     // Storage hazırla
     await Storage.init();
 
+    // Hedef bağlamı: lig/takım kimliğini sayfanın kendi trafiğinden öğrenir.
+    // UI'dan ÖNCE kurulmalı ki ilk istekler kaçmasın.
+    if (typeof TargetContext !== "undefined") {
+        TargetContext.init();
+    }
+
     // Body oluşmasını bekle
     if (!document.body) {
         await new Promise(resolve => {
@@ -45,7 +51,34 @@ if (typeof IframeHandler !== "undefined") {
     }
 
     // UI oluştur
-    UI.init();
+    await UI.init();
+
+    // Debug modu: "osmdbg" yazılınca açılır. Erken kurulur çünkü aşağıdaki
+    // ban/duraklatma dalları return ediyor; teşhis her durumda çalışmalı.
+    if (typeof DebugMode !== "undefined") {
+        await DebugMode.init();
+    }
+
+    // Hedef satırlarındaki "şimdi dene" butonları otomasyon durmuşken de
+    // çalışmalı; dinleyici start()'tan bağımsız kurulur. Geri sayımlar da
+    // panel açıkken sürekli beslenir.
+    if (typeof Automation !== "undefined") {
+        Automation.installRetryListener();
+
+        // injectReady yalnızca Automation.start() içinde işaretleniyordu;
+        // otomasyon başlatılmadan yapılan çağrılar (timers, satır butonları)
+        // sonsuza kadar bekliyordu. Bootstrap'ta da bağla.
+        if (window.__INJECT_READY) {
+            Automation.injectReady = true;
+        } else {
+            window.addEventListener("__INJECT_READY", () => {
+                Automation.injectReady = true;
+            }, { once: true });
+        }
+    }
+    if (typeof TargetTimers !== "undefined") {
+        TargetTimers.start();
+    }
 
     // Timer devam ediyorsa geri sayımı sürdür
     await Timer.resume();
@@ -79,8 +112,12 @@ if (typeof IframeHandler !== "undefined") {
         // durdur butonu kayboluyordu.
         UI.setStarted();
 
+        // API bypass sayfa bağımsız çalışır (istekler doğrudan API'ye gider),
+        // o yüzden yalnızca DOM'a bağlı modlarda BusinessClub'a yönlendiririz.
+        const prefs = await Storage.get(["bypassMode"]);
         const isBusinessClub = window.location.href.toLowerCase().includes("businessclub");
-        if (!isBusinessClub) {
+
+        if (!prefs.bypassMode && !isBusinessClub) {
             Logger.info("BusinessClub sayfasında değil, yönlendiriliyor...");
             UI.setStatus("statusRedirecting");
             setTimeout(() => {

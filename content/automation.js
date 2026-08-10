@@ -19,6 +19,7 @@ const Automation = {
         // Sayfa kaynaklı reward API çağrılarını da logla (modal odak kaybı
         // modunda watched/consume'u SAYFA yapıyor, bizim callApi değil).
         this.installRewardResponseLogger();
+        this.installRetryListener();
 
         // inject.js hazır mı kontrol et (content.js script.onload'dan)
         if (window.__INJECT_READY) {
@@ -64,7 +65,15 @@ const Automation = {
 
         if (this.bypassMode) {
             Logger.info("⚡ API Bypass modu aktif.");
-            this.apiAdLoop();
+
+            // Geri sayımları besle (her hedefin süresi ayrı).
+            if (typeof TargetTimers !== "undefined") TargetTimers.start();
+
+            // Çok hedefli motor tek hedefte de doğru çalışıyor ve cap dolunca
+            // sıradakine geçebiliyor. Eski apiAdLoop BusinessClub cap'e
+            // takılınca return ediyordu; seçili başka hedefler varsa onlara
+            // hiç sıra gelmiyordu.
+            this.multiTargetLoop();
         } else {
             // Normal ve Modal Odak Kaybı modları aynı buton-bul-tıkla döngüsünü paylaşır;
             // fark handleVideo içinde (modalCloseMode ? erken kapat : tam izle).
@@ -258,6 +267,401 @@ const Automation = {
     },
 
     // ======================
+    // ÇOK HEDEFLİ API DÖNGÜSÜ
+    // ======================
+
+    // Seçili hedefleri sırayla işler: sınırlı haklar (Birikimler/Antrenman/
+    // Scout) önce, sürekli olan BusinessClub sona. Bir hedef cap'e takılırsa
+    // veya hakkı biterse sıradakine geçilir; hepsi tükenirse en kısa cap
+    // süresi kadar beklenir.
+    async multiTargetLoop() {
+        Logger.info("Çok hedefli API döngüsü başladı.");
+
+        const enabled = await this.getEnabledTargets();
+        if (enabled.length === 0) {
+            Logger.warning("Hiç hedef seçilmemiş.");
+            UI.setStatus("statusIdle");
+            return;
+        }
+
+        Logger.info(`Hedefler: ${enabled.map(t => t.key).join(" → ")}`);
+
+        // Hedef başına bu turdaki durum: kaç tur yapıldı, cap ne zaman açılır.
+        const state = {};
+        enabled.forEach(t => state[t.key] = { done: 0, blockedUntil: 0 });
+
+        while (true) {
+            const s = await Storage.get(["botPaused", "isBanned"]);
+            if (s.botPaused) { UI.setStatus("statusPaused"); return; }
+            if (s.isBanned) { Logger.info("Ban işliyor, döngü duruyor."); return; }
+
+            const now = Date.now();
+
+            // Elle tetiklenen hedef sıraya kaynar: beklemesi iptal edilir.
+            for (const key of this._manualRetry) {
+                if (state[key]) state[key].blockedUntil = 0;
+            }
+
+            const pickable = (t) => {
+                const st = state[t.key];
+                if (st.blockedUntil > now) return false;
+                if (t.dailyLimit && st.done >= t.dailyLimit) return false;
+                if (!TargetContext.ready(t)) return false;
+                return true;
+            };
+
+            // Seçim önceliği:
+            //  1. Business Club — ana gelir kaynağı, hakkı varken bekletilmez
+            //  2. Elle tetiklenen ya da beklemesi yeni dolan hedef
+            //  3. Normal sıra (sınırlı haklar önce, Targets.order)
+            const bc = enabled.find(t => t.key === "businessClub");
+            const target = (bc && pickable(bc) ? bc : null)
+                        || enabled.find(t => this._manualRetry.has(t.key) && pickable(t))
+                        || enabled.find(pickable);
+
+            if (target) this._manualRetry.delete(target.key);
+
+            if (!target) {
+                // Hepsi kapalı. En erken açılan hedefin saatine kadar UYU ve
+                // döngüye DEVAM et — burada return edilirse süre dolduğunda
+                // kimse uyanmaz, kullanıcının elle Başlat'a basması gerekirdi.
+                const waiting = enabled
+                    .map(t => state[t.key].blockedUntil)
+                    .filter(v => v > now);
+
+                if (waiting.length === 0) {
+                    // Bekleyen yok, sadece hakkı bitenler var (günlük limit).
+                    // Gün dönümüne kadar sürecek; döngüyü kapat.
+                    Logger.info("Tüm hedeflerin hakkı doldu.");
+                    UI.setStatus("statusIdle");
+                    UI.setStopped();
+                    await Storage.set({ automationStarted: false });
+                    return;
+                }
+
+                // En erken açılan hedefi bul: üstteki büyük geri sayım onu
+                // gösterir ve uyanınca deneme onunla başlar.
+                let soonestKey = null;
+                let next = Infinity;
+                for (const t of enabled) {
+                    const until = state[t.key].blockedUntil;
+                    if (until > now && until < next) {
+                        next = until;
+                        soonestKey = t.key;
+                    }
+                }
+
+                // Uyanınca sıraya o hedef alınsın (BC hariç: o zaten listenin
+                // sonunda ama önceliklidir — aşağıdaki seçimde öne alınır).
+                if (soonestKey) this._manualRetry.add(soonestKey);
+
+                const waitMs = Math.max(next - Date.now(), 15000);
+                const minutes = Math.ceil(waitMs / 60000);
+
+                Logger.info(`En erken açılan: ${soonestKey}, ${minutes} dakika bekleniyor.`);
+                UI.setStatus("statusWaiting");
+                // Beklerken DURDUR görünmeli: setCooldown ikisini de gizliyor,
+                // kullanıcı otomasyonu iptal edemiyordu. Üst sayaca da
+                // dokunmuyoruz — satırlardan beslenen tick en küçüğü yazıyor.
+                UI.setStarted();
+
+                const sleptFully = await this.sleepUntil(next);
+
+                // Duraklatma yüzünden erken uyandıysak "çalışıyor" gösterme;
+                // döngü başındaki botPaused kontrolü zaten çıkışı yönetir.
+                if (!sleptFully) continue;
+
+                UI.setStatus("statusRunning");
+                UI.setStarted();
+                continue;
+            }
+
+            const result = await this.runTargetCycle(target, state[target.key]);
+
+            // Tur ortasında durduruldu: sayaç artırmadan çık.
+            if (result.paused) {
+                Logger.info("Durduruldu.");
+                UI.setStatus("statusPaused");
+                UI.setStopped();
+                return;
+            }
+
+            if (result.capReached) {
+                state[target.key].blockedUntil = result.until || (Date.now() + 3600000);
+                const mins = Math.ceil((state[target.key].blockedUntil - Date.now()) / 60000);
+                Logger.warning(`${target.key}: cap dolu, ${mins} dakika sonra tekrar.`);
+                continue;
+            }
+
+            if (result.ok) {
+                state[target.key].done++;
+                await this.recordReward();
+                Logger.success(`${target.key}: ödül alındı (${state[target.key].done}. tur).`);
+                await this.delay(3000);
+            } else {
+                // Başarısız: bu hedefi kısa süre dinlendir, diğerlerine geç.
+                state[target.key].blockedUntil = Date.now() + 60000;
+                Logger.warning(`${target.key}: başarısız, 1 dakika atlanıyor.`);
+            }
+        }
+    },
+
+    // Satır başına "şimdi dene": o hedefin bekleme kaydını siler, döngü bir
+    // sonraki turda onu tekrar dener. Döngü çalışmıyorsa tek tur çalıştırır.
+    _manualRetry: new Set(),
+
+    installRetryListener() {
+        if (this._retryListenerInstalled) return;
+        this._retryListenerInstalled = true;
+
+        document.addEventListener("osm:retryTarget", async (e) => {
+            const key = e.detail && e.detail.key;
+
+            // Sonucu HER yolda bildir: aksi halde buton "çalışıyor" durumunda
+            // asılı kalıyor ve kullanıcı bir şey olup olmadığını anlamıyor.
+            const done = (ok, reason) => {
+                document.dispatchEvent(new CustomEvent("osm:targetResult", {
+                    detail: { key, ok, reason }
+                }));
+            };
+
+            const target = Targets.get(key);
+            if (!target) {
+                Logger.warning(`Bilinmeyen hedef: ${key}`);
+                return done(false, "unknown");
+            }
+
+            // Döngüye de haber ver: sırası gelince öne alınsın.
+            this._manualRetry.add(key);
+
+            // ESKİDEN: yalnızca otomasyon DURUYORKEN deneniyordu. Döngü
+            // çalışırken butona basmak hiçbir şey yapmıyordu (döngü uzun
+            // uykudaysa tur başına hiç gelinmiyor). Artık her durumda
+            // doğrudan bir tur çalıştırılır.
+            const s = await Storage.get(["isBanned"]);
+            if (s.isBanned) {
+                Logger.warning("Bekleme süresi sürüyor, deneme atlandı.");
+                return done(false, "banned");
+            }
+
+            if (!TargetContext.ready(target)) {
+                // Antrenman slotları veya lig/takım henüz bilinmiyor olabilir.
+                if (target.needsSession) await TargetContext.refreshTrainingSessions();
+                if (!TargetContext.ready(target)) {
+                    Logger.warning(`${key}: bağlam hazır değil (lig/takım/slot).`);
+                    return done(false, "notready");
+                }
+            }
+
+            Logger.info(`${key}: deneniyor...`);
+            try {
+                const result = await this.runTargetCycle(target, { done: 0 }, true);
+
+                if (result.ok) {
+                    await this.recordReward();
+                    Logger.success(`${key}: ödül alındı.`);
+                    done(true);
+                } else if (result.capReached) {
+                    const mins = result.until
+                        ? Math.ceil((result.until - Date.now()) / 60000)
+                        : null;
+                    Logger.warning(`${key}: cap dolu${mins ? ` (${mins} dk)` : ""}.`);
+                    done(false, "cap");
+                } else {
+                    Logger.warning(`${key}: başarısız.`);
+                    done(false, "fail");
+                }
+            } catch (err) {
+                Logger.error(`${key}: hata — ${err.message}`);
+                done(false, "error");
+            }
+
+            if (typeof TargetTimers !== "undefined") TargetTimers.poll();
+        });
+    },
+
+    // Verilen zamana kadar uyur ama 5 saniyede bir uyanıp duraklatma kontrol
+    // eder: tek uzun setTimeout ile beklenirse Durdur'a basmak bir saat sonra
+    // etki ederdi. Duraklatılırsa erken döner.
+    async sleepUntil(timestamp) {
+        const STEP = 5000;
+        while (Date.now() < timestamp) {
+            const s = await Storage.get(["botPaused"]);
+            if (s.botPaused) return false;
+
+            const left = timestamp - Date.now();
+            await this.delay(Math.min(STEP, left));
+        }
+        return true;
+    },
+
+    // Birikimler kaçıncı adımda? caps/sequences her adımın durumunu DİZİ
+    // olarak döndürür (kayıt 13:29):
+    //   [{actionId:"Multistep1", isCapReached:true,  timestampUntilUnreached:...},
+    //    {actionId:"Multistep2", isCapReached:true,  ...},
+    //    {actionId:"Multistep3", isCapReached:false, ...}]
+    // Yapılabilir ilk adım = isCapReached false olan ilki. Hepsi doluysa null
+    // döner ve çağıran hedefi cap'li sayar.
+    async fetchSequenceStep(target) {
+        try {
+            const resp = await this.callApi(Targets.url(target.capPath()), null, "GET");
+            if (!Array.isArray(resp)) return null;
+
+            let earliestCap = null;
+
+            for (const item of resp) {
+                const m = String(item.actionId || "").match(/(\d+)$/);
+                if (!m) continue;
+
+                if (item.isCapReached !== true) {
+                    const step = Number(m[1]);
+                    Logger.info(`${target.key}: sıradaki adım ${step}.`);
+                    return step;
+                }
+
+                if (item.timestampUntilUnreached) {
+                    earliestCap = earliestCap === null
+                        ? item.timestampUntilUnreached
+                        : Math.min(earliestCap, item.timestampUntilUnreached);
+                }
+            }
+
+            // Tüm adımlar dolu: paneldeki geri sayım yenilenme saatini göstersin.
+            if (earliestCap && typeof TargetTimers !== "undefined") {
+                TargetTimers.setCap(target.key, earliestCap);
+            }
+            Logger.info(`${target.key}: tüm adımlar tamamlanmış.`);
+            return null;
+        } catch (e) {
+            return null;
+        }
+    },
+
+    // Tur ortasında duraklatma/ban kontrolü. Bir tur ~5 saniye sürüyor;
+    // yalnızca tur başında bakılırsa Durdur'a basınca geç tepki veriyor.
+    async isPaused() {
+        const s = await Storage.get(["botPaused", "isBanned"]);
+        return !!(s.botPaused || s.isBanned);
+    },
+
+    // Panelde işaretli hedefleri Targets.order sırasında döndürür.
+    async getEnabledTargets() {
+        const s = await Storage.get(["enabledTargets"]);
+        const keys = Array.isArray(s.enabledTargets) && s.enabledTargets.length
+            ? s.enabledTargets
+            : ["businessClub"];   // varsayılan: eski davranış
+        return Targets.order.filter(k => keys.includes(k)).map(k => Targets.get(k));
+    },
+
+    // Tek hedef için start → watched → consume. Hedef farkları sadece
+    // actionId ve consume URL'inde; akış ortak.
+    // manual=true: kullanıcı satır butonuna bastı, duraklatma bu turu
+    // engellemez (bilinçli istek). Ban yine de üstte kontrol edilir.
+    async runTargetCycle(target, targetState, manual = false) {
+        UI.setStatus("statusAdWatching");
+        UI.setAdCounter(this.currentAdCount + 1);
+
+        // Birikimler adım numarasını actionId'ye gömer (Multistep1..3).
+        // Bellekteki sayaç yanıltıcı: kullanıcı gün içinde elle izlemiş
+        // olabilir, sayfa yenilenince sayaç sıfırlanır. Gerçek adımı
+        // sunucudan sor.
+        let step = targetState.done + 1;
+        if (typeof target.actionId === "function" && target.capPath) {
+            const serverStep = await this.fetchSequenceStep(target);
+            if (serverStep === null) {
+                // Tüm adımlar dolu. Bellek sayacına düşmek yanlış olurdu:
+                // Multistep1 denenip cap'e takılır, kalan adımlar hiç
+                // görülmezdi (3. adım dururken hedefin atlanma sebebi buydu).
+                const until = TargetTimers?.capUntil?.[target.key];
+                return {
+                    ok: false,
+                    capReached: true,
+                    until: until ? until * 1000 : Date.now() + 3600000
+                };
+            }
+            step = serverStep;
+        }
+
+        const actionId = typeof target.actionId === "function"
+            ? target.actionId(step)
+            : target.actionId;
+
+        const start = await this.callApi(
+            Targets.url("/api/v1.1/user/videos/start"),
+            `actionId=${encodeURIComponent(actionId)}&capVariation=0`
+        );
+        if (!start) return { ok: false };
+        if (!manual && await this.isPaused()) return { ok: false, paused: true };
+
+        if (start.isCapReached === true) {
+            const until = start.timestampUntilUnreached
+                ? start.timestampUntilUnreached * 1000
+                : 0;
+            // Paneldeki geri sayım cap'i göstersin (timers'taki süre farklı
+            // şeyi ölçüyor: antrenmanın kendi bitişi, reklam hakkını değil).
+            if (typeof TargetTimers !== "undefined" && start.timestampUntilUnreached) {
+                TargetTimers.setCap(target.key, start.timestampUntilUnreached);
+            }
+            return { ok: false, capReached: true, until };
+        }
+
+        // Cap açık: varsa eski kaydı temizle ki panel "Hazır" gösterebilsin.
+        if (typeof TargetTimers !== "undefined") {
+            TargetTimers.setCap(target.key, null);
+        }
+
+        await this.delay(1500);
+
+        const watched = await this.callApi(
+            Targets.url("/api/v1.1/user/videos/watched"),
+            `actionId=${encodeURIComponent(actionId)}&rewardVariation=0&capVariation=0`
+        );
+        const rewardId = this.extractRewardId(watched);
+        if (!rewardId) {
+            Logger.warning(`${target.key}: rewardId çıkarılamadı.`);
+            return { ok: false };
+        }
+
+        // Duraklatma kontrolü consume'dan ÖNCE son kez: rewardId alındı ama
+        // tüketilmediyse kaybolmaz, sunucuda bekler (expiredTimestamp ~7 gün).
+        if (!manual && await this.isPaused()) return { ok: false, paused: true };
+
+        // Antrenman: hangi slotun kısaltılacağı round-robin ile seçilir.
+        // Slot listesi bilinmiyorsa (ilk tur veya sayfa değişti) tazele.
+        if (target.needsSession && TargetContext.trainingSessions.length === 0) {
+            await TargetContext.refreshTrainingSessions();
+        }
+
+        const ctx = {
+            leagueId: TargetContext.leagueId,
+            teamId: TargetContext.teamId,
+            sessionId: target.needsSession ? TargetContext.nextSession() : null,
+            // Birikimler'de consume ucu ödül tipine göre değişiyor.
+            rewardType: this.extractRewardType(watched)
+        };
+        if (target.needsSession && !ctx.sessionId) {
+            Logger.warning("Antrenman slotu bilinmiyor, hedef atlanıyor.");
+            return { ok: false };
+        }
+
+        const claim = await this.callApi(
+            Targets.url(target.consumePath(ctx)),
+            `rewardId=${encodeURIComponent(rewardId)}`
+        );
+
+        if (!claim) return { ok: false };
+
+        // BusinessClub'da cüzdan göstergesi elle tazelenmeli; diğer hedeflerde
+        // geri sayım sunucudan besleniyor, consume yanıtı zaten güncel timer'ı
+        // döndürüyor.
+        if (target.key === "businessClub" && typeof claim === "object") {
+            this.refreshPageWallet(claim);
+        }
+
+        return { ok: true };
+    },
+
+    // ======================
     // API BYPASS DÖNGÜSÜ
     // ======================
 
@@ -292,6 +696,13 @@ const Automation = {
 
             // Cap: TAM süreyi API'den al.
             if (startResponse.isCapReached === true && startResponse.timestampUntilUnreached) {
+                // Satır geri sayımı da dolsun: eski tek hedefli döngü paneli
+                // yalnızca üstteki genel sayaca yazıyordu, BusinessClub satırı
+                // boş kalıyordu.
+                if (typeof TargetTimers !== "undefined") {
+                    TargetTimers.setCap("businessClub", startResponse.timestampUntilUnreached);
+                }
+
                 const now = Math.floor(Date.now() / 1000);
                 const remaining = startResponse.timestampUntilUnreached - now;
                 if (remaining > 0) {
@@ -388,6 +799,16 @@ const Automation = {
     // (HAR response body'lerini kaydetmemiş), o yüzden savunmalı: önce bilinen
     // olası alanları dene, bulunamazsa yanıttaki ilk UUID'yi (consumereward'ın
     // beklediği format: 8-4-4-4-12 hex) yakala.
+    // watched yanıtındaki reward.type. Birikimler'de consume ucunu belirler
+    // (type 1 = boss coin → bosscoinwallet, diğerleri → finances).
+    // Yanıt dizi de olabiliyor: [{reward:{type:1,...}}]
+    extractRewardType(resp) {
+        const first = Array.isArray(resp) ? resp[0] : resp;
+        if (!first || typeof first !== "object") return null;
+        const type = first.reward && first.reward.type;
+        return typeof type === "number" ? type : null;
+    },
+
     extractRewardId(resp) {
         if (!resp || typeof resp !== "object") return null;
 
@@ -512,7 +933,7 @@ const Automation = {
         window.postMessage({ type: "__OSM_UPDATE_WALLET", wallet: wallet }, "*");
     },
 
-    async callApi(endpoint, body) {
+    async callApi(endpoint, body, method = "POST") {
         if (!this.injectReady) {
             Logger.info("inject.js hazır değil, bekleniyor...");
             await new Promise(resolve => {
@@ -573,6 +994,7 @@ const Automation = {
                 type: "__OSM_API_CALL",
                 endpoint: endpoint,
                 body: body,
+                method: method,
                 id: id
             }, "*");
 

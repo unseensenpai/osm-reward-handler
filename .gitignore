@@ -13,8 +13,13 @@ assets/*legit*.json
 assets/*watch*.json
 
 # Tüm ağ/konsol log dökümleri (token/cookie taşır) — geniş kapsam
-assets/networklogs*
-assets/network-logs*
+# DİKKAT: ayırıcı ne olursa olsun tutsun (networklogs / network-logs /
+# network_logs). Dar kalıp yüzünden network_logs.json bir kez commit'e girdi.
+assets/network*log*
+assets/*network*log*
+network*log*
+assets/osm-debug-*.json
+osm-debug-*.json
 assets/*console*.txt
 
 # Superpowers çalışma notları (spec/plan) — repoya girmez

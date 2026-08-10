@@ -76,5 +76,47 @@
   },
   "modalCloseDelayLabel": {
     "message": "Kapatma tamponu: ${ms} ms"
+  },
+  "labelTargets": {
+    "message": "Hedefler"
+  },
+  "targetBusinessClub": {
+    "message": "Business Club"
+  },
+  "targetSavings": {
+    "message": "Birikimler"
+  },
+  "targetTraining": {
+    "message": "Antrenman"
+  },
+  "targetScout": {
+    "message": "Yetenek Avcısı"
+  },
+  "targetRetryTooltip": {
+    "message": "Bu hedefi şimdi dene"
+  },
+  "targetReady": {
+    "message": "Hazır"
+  },
+  "targetSlotsTooltip": {
+    "message": "Hangi antrenörlerin kısaltılacağını seç"
+  },
+  "slotsLoading": {
+    "message": "Antrenmanlar yükleniyor..."
+  },
+  "slotsEmpty": {
+    "message": "Aktif antrenman bulunamadı"
+  },
+  "tooltipAdCap": {
+    "message": "Yeni reklam hakkına kalan süre"
+  },
+  "tooltipFinish": {
+    "message": "Bitişine kalan süre"
+  },
+  "collapseTooltip": {
+    "message": "Paneli küçült"
+  },
+  "expandTooltip": {
+    "message": "Paneli aç"
   }
 }
