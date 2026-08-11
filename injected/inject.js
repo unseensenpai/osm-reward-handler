@@ -82,26 +82,49 @@
         return exp - SKEW_SECONDS <= Math.floor(Date.now() / 1000);
     }
 
-    // Sayfanın KENDİ tokenRefresh akışını tetikle. Bunu doğrudan çağıramayız
-    // (refresh token bizde değil), ama sayfanın viewModel'i üzerinden
-    // tetiklenebiliyor. Tutmazsa sessizce geçilir; çağıran zaten bekleyecek.
+    // Sayfanın KENDİ tokenRefresh akışını tetikle.
+    //
+    // Refresh token bizde değil, o yüzden tokenRefresh'i doğrudan çağıramayız.
+    // Konsol kanıtı, OSM'in bunu nasıl yaptığını gösteriyor:
+    //     e.refreshToken @ osm.js:31
+    //     e.queueForAuthorization @ osm.js:34
+    //     e.handleFailedHttpResponse @ osm.js:31
+    // Yani refreshToken appViewModel'de DEĞİL, sayfanın HTTP katmanında ve
+    // yalnızca sayfanın KENDİ isteklerinden biri 401 alınca otomatik çalışıyor.
+    // Bizim çağrımız originalFetch ile o katmanı baypas ettiği için bu
+    // mekanizma hiç tetiklenmiyordu (appViewModel.refreshToken aranıyordu,
+    // orada olmadığı için 8sn boşuna beklenip pes ediliyordu).
+    //
+    // Çözüm: sayfanın kendi XHR katmanından zararsız bir istek attır. Bayat
+    // token'la 401 alacak, OSM'in handleFailedHttpResponse'u devreye girip
+    // tokenRefresh'i çalıştıracak ve yeni token bizim send hook'umuzdaki
+    // captureBearer ile yakalanacak.
     function nudgeTokenRefresh() {
+        // Önce viewModel'de dursa da kullan (sürüm değişirse diye).
         try {
-            if (typeof appViewModel === "undefined") return false;
-            // OSM'in oturum katmanı: adı sürümle değişebildiği için birkaç
-            // bilinen giriş noktası denenir.
-            const candidates = [
-                appViewModel.refreshToken,
-                appViewModel.tokenRefresh,
-                appViewModel.session && appViewModel.session.refreshToken
-            ];
-            for (const fn of candidates) {
-                if (typeof fn === "function") {
-                    fn.call(appViewModel);
+            if (typeof appViewModel !== "undefined") {
+                const direct = appViewModel.refreshToken ||
+                               appViewModel.tokenRefresh ||
+                               (appViewModel.session && appViewModel.session.refreshToken);
+                if (typeof direct === "function") {
+                    direct.call(appViewModel);
                     return true;
                 }
             }
         } catch (e) {}
+
+        // Asıl yol: sayfanın kendi XHR'ı ile hafif bir uca istek at.
+        // XMLHttpRequest.prototype.send hook'u ve OSM'in kendi interceptor'ı
+        // ikisi de bu istekte devrede olur.
+        try {
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", "https://web-api.onlinesoccermanager.com/api/v1/user/accounts", true);
+            // OSM'in katmanı authorization'ı kendisi ekler; biz eklemeyiz ki
+            // 401 gerçekten sayfanın akışından geçsin.
+            xhr.send();
+            return true;
+        } catch (e) {}
+
         return false;
     }
 

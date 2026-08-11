@@ -13,7 +13,8 @@
 **English:**
 - **Four reward targets** in one run (see below); limited ones first, Business Club last
 - Direct API reward flow (`start → watched → consumereward`) with live wallet update
-- Per-target countdowns and a "try now" button on each row
+- Automatic Bearer token refresh: the short-lived JWT is checked before every call and renewed on 401, so the run does not silently die when the tab goes idle
+- Per-target countdowns — each row counts down on its own — and a "try now" button on each row
 - Training slot selection: choose which trainers get sped up (round-robin)
 - Collapsible panel that docks to the nearest screen edge, draggable, position remembered
 - Cooldown / ban management with persistent countdown timer
@@ -24,7 +25,8 @@
 **Türkçe:**
 - **Dört ödül hedefi** tek çalıştırmada (aşağıya bakın); sınırlı olanlar önce, Business Club sona
 - Doğrudan API ödül akışı (`start → watched → consumereward`) ve canlı cüzdan güncellemesi
-- Hedef başına geri sayım ve her satırda "şimdi dene" butonu
+- Otomatik Bearer token tazeleme: kısa ömürlü JWT her çağrı öncesi kontrol edilir ve 401'de yenilenir; sekme boşa düştüğünde otomasyon sessizce ölmez
+- Hedef başına geri sayım — her satır kendi süresini sayar — ve her satırda "şimdi dene" butonu
 - Antrenman slot seçimi: hangi antrenörlerin kısaltılacağını seç (sırayla)
 - Küçültülebilir panel: en yakın kenara yapışır, sürüklenebilir, konumu hatırlanır
 - Cooldown / ban yönetimi ve kalıcı geri sayım
@@ -93,16 +95,18 @@ modları yalnızca Business Club destekler — sayfa içi ödül modalı olan te
 ## Usage / Kullanım
 
 **English:**
-1. Open the BusinessClub page (the bot redirects there automatically if needed)
+1. Open any OSM page. **API bypass works from anywhere** — it talks to the API directly, so no page change is needed. Only the modal/normal modes require the BusinessClub page, and the bot redirects there for you.
 2. On the top-left panel, tick a mode — **API bypass** is recommended
-3. Click "▶ Start"; the bot runs the reward flow automatically
-4. Click "⏸ Stop" to pause
+3. Tick the targets you want; only ticked targets are run
+4. Click "▶ Start"; the bot runs the reward flow automatically
+5. Click "⏸ Stop" to pause
 
 **Türkçe:**
-1. BusinessClub sayfasını açın (gerekirse bot otomatik yönlendirir)
+1. Herhangi bir OSM sayfasını açın. **API bypass her sayfadan çalışır** — doğrudan API ile konuştuğu için sayfa değişimine gerek yok. Yalnızca modal/normal modlar BusinessClub sayfasını gerektirir, bot oraya kendisi yönlendirir.
 2. Sol üstteki panelde bir mod seçin — **API bypass** önerilir
-3. "▶ Başlat"a tıklayın; bot ödül akışını otomatik çalıştırır
-4. "⏸ Durdur" ile durdurabilirsiniz
+3. İstediğiniz hedefleri işaretleyin; yalnızca işaretli hedefler çalıştırılır
+4. "▶ Başlat"a tıklayın; bot ödül akışını otomatik çalıştırır
+5. "⏸ Durdur" ile durdurabilirsiniz
 
 ---
 
@@ -142,6 +146,8 @@ modları yalnızca Business Club destekler — sayfa içi ödül modalı olan te
 │   ├── logger.js
 │   ├── storage.js
 │   ├── timer.js
+│   ├── targets.js
+│   ├── debug.js
 │   ├── ui.js
 │   └── automation.js
 ├── injected/

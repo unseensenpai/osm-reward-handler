@@ -411,9 +411,17 @@ const Automation = {
 
                 await this.delay(3000);
             } else {
-                // Başarısız: bu hedefi kısa süre dinlendir, diğerlerine geç.
-                state[target.key].blockedUntil = Date.now() + 60000;
-                Logger.warning(`${target.key}: başarısız, 1 dakika atlanıyor.`);
+                // Kimlik hatası (401 / token yenilenemedi) GEÇİCİDİR ve hedefe
+                // özgü değildir: sayfa bir sonraki isteğinde token'ı tazeleyince
+                // kendiliğinden düzelir. Bunu 1 dakikalık cezaya çevirmek
+                // yanlıştı — panel cap'ten beslenip "Hazır" gösterirken döngü
+                // kendi 60sn'sini bekliyor, kullanıcı Durdur/Başlat yapmak
+                // zorunda kalıyordu. Kısa bekleyip tekrar denenir.
+                const penalty = result.authFailure ? 10000 : 60000;
+                state[target.key].blockedUntil = Date.now() + penalty;
+                Logger.warning(result.authFailure
+                    ? `${target.key}: kimlik hatası, 10 saniye sonra tekrar denenecek.`
+                    : `${target.key}: başarısız, 1 dakika atlanıyor.`);
             }
         }
     },
@@ -602,7 +610,9 @@ const Automation = {
             Targets.url("/api/v1.1/user/videos/start"),
             `actionId=${encodeURIComponent(actionId)}&capVariation=0`
         );
-        if (!start) return { ok: false };
+        // 401 ise bunu çağırana bildir: geçici kimlik hatası, hedefe özgü
+        // kalıcı bir sorun değil (uzun cezaya çevrilmemeli).
+        if (!start) return { ok: false, authFailure: this.lastAuthFailure };
         if (!manual && await this.isPaused()) return { ok: false, paused: true };
 
         if (start.isCapReached === true) {
@@ -630,6 +640,10 @@ const Automation = {
         );
         const rewardId = this.extractRewardId(watched);
         if (!rewardId) {
+            // watched null döndüyse sebep 401 olabilir; ayırt et.
+            if (!watched && this.lastAuthFailure) {
+                return { ok: false, authFailure: true };
+            }
             Logger.warning(`${target.key}: rewardId çıkarılamadı.`);
             return { ok: false };
         }
@@ -661,7 +675,7 @@ const Automation = {
             `rewardId=${encodeURIComponent(rewardId)}`
         );
 
-        if (!claim) return { ok: false };
+        if (!claim) return { ok: false, authFailure: this.lastAuthFailure };
 
         // BusinessClub: cüzdan göstergesi sayfanın kendi updateWallet'ı ile
         // F5'siz tazelenir (çözülmüş akış), sayfa yenilenmez.
@@ -968,6 +982,10 @@ const Automation = {
         const shortName = endpoint.split("/").slice(-1)[0];
         Logger.info(`→ İSTEK ${shortName}  body=${body || "(yok)"}`);
 
+        // Her çağrının kendi kimlik durumu olsun; önceki çağrının bayrağı
+        // bu çağrıya sızmamalı.
+        this.lastAuthFailure = false;
+
         return new Promise(resolve => {
             const id = Date.now() + "_" + Math.random();
             let resolved = false;
@@ -986,6 +1004,10 @@ const Automation = {
 
                     // HTTP hatası: gövde ne olursa olsun başarısız say.
                     if (ok === false) {
+                        // Kimlik hatasını işaretle: çağıran bunu geçici sayıp
+                        // hedefi uzun süre cezalandırmamalı. (status 0 = CORS'a
+                        // dönüşmüş 401; sunucu 401'de CORS header'ı eklemiyor.)
+                        this.lastAuthFailure = (status === 401 || status === 0);
                         Logger.warning(`API ${status} döndü (${shortName}).`);
                         resolve(null);
                         return;
@@ -1017,6 +1039,12 @@ const Automation = {
                 id: id
             }, "*");
 
+            // Timeout, inject.js'in EN KÖTÜ senaryosundan uzun olmalı:
+            // proaktif tazeleme beklemesi (5sn) + 401 sonrası token yenileme
+            // beklemesi (8sn) + iki fetch. 15sn buna yetmiyordu; token
+            // yenilenmesi tamamlanmadan timeout devreye girip çağrıyı
+            // başarısız sayıyordu (konsolda "Token yenilenemedi" ile
+            // "API çağrısı timeout" peş peşe geliyordu).
             setTimeout(() => {
                 if (!resolved) {
                     resolved = true;
@@ -1024,7 +1052,7 @@ const Automation = {
                     Logger.warning("API çağrısı timeout (" + endpoint + ")");
                     resolve(null);
                 }
-            }, 15000);
+            }, 30000);
         });
     },
 
