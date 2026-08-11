@@ -397,6 +397,18 @@ const Automation = {
                 state[target.key].done++;
                 await this.recordReward();
                 Logger.success(`${target.key}: ödül alındı (${state[target.key].done}. tur).`);
+
+                // BC dışı hedefte ödül alındıysa sayfa yenilenir: antrenman
+                // süresi / para göstergesi ancak böyle güncelleniyor. Ödül
+                // kaydedildikten SONRA yenilenir ki sayaç kaybolmasın.
+                if (this.pendingReload) {
+                    this.pendingReload = false;
+                    Logger.info("Veriler tazeleniyor, sayfa yenileniyor...");
+                    await this.delay(1500);
+                    location.reload();
+                    return;
+                }
+
                 await this.delay(3000);
             } else {
                 // Başarısız: bu hedefi kısa süre dinlendir, diğerlerine geç.
@@ -651,12 +663,19 @@ const Automation = {
 
         if (!claim) return { ok: false };
 
-        // BusinessClub'da cüzdan göstergesi elle tazelenmeli; diğer hedeflerde
-        // geri sayım sunucudan besleniyor, consume yanıtı zaten güncel timer'ı
-        // döndürüyor.
+        // BusinessClub: cüzdan göstergesi sayfanın kendi updateWallet'ı ile
+        // F5'siz tazelenir (çözülmüş akış), sayfa yenilenmez.
         if (target.key === "businessClub" && typeof claim === "object") {
             this.refreshPageWallet(claim);
+            return { ok: true };
         }
+
+        // Diğer hedefler (antrenman, scout, birikimler): ödül alındıktan sonra
+        // ekranda güncellenmesi gereken şey cüzdan DEĞİL — antrenman süresi
+        // kısalıyor, para/puan değişiyor. Bunların sayfa içi tazeleme yolu yok,
+        // o yüzden sayfayı yenileriz ki son veriler gelsin. Yenileme döngüyü
+        // kesmez: content.js yeniden yüklenip otomasyonu kaldığı yerden sürdürür.
+        this.pendingReload = true;
 
         return { ok: true };
     },

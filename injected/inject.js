@@ -48,6 +48,75 @@
     }
 
     // ======================
+    // TOKEN TAZELİĞİ
+    // ======================
+    // Yakalanan JWT kısa ömürlü (nbf→exp = 1200sn / 20dk). Yakalama PASİF:
+    // yalnızca sayfa kendi isteğini attığında güncelleniyor. Kullanıcı sekmede
+    // işlem yapmayı bırakınca sayfa tokenRefresh çağırmıyor, token bayatlıyor
+    // ve biz bayat token'ı sonsuza kadar gönderip her çağrıda 401 alıyoruz.
+    // (55k satırlık log kanıtı: 11.000 satır boyunca tek token yakalama yok,
+    // aynı aralıkta tek bir 200 de yok.)
+
+    // JWT payload'ından exp'i (unix saniye) oku. Çözülemezse null.
+    function tokenExp(jwt) {
+        try {
+            const part = String(jwt).split(".")[1];
+            if (!part) return null;
+            // base64url → base64
+            const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+            const payload = JSON.parse(atob(b64));
+            return typeof payload.exp === "number" ? payload.exp : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Token yok, süresi dolmuş ya da dolmasına SKEW_SECONDS'tan az kaldıysa
+    // bayat sayılır. Erken davranmak 401'den iyidir.
+    const SKEW_SECONDS = 60;
+
+    function isTokenStale(jwt) {
+        if (!jwt) return true;
+        const exp = tokenExp(jwt);
+        if (exp === null) return false;   // decode edilemiyorsa körlemesine atma
+        return exp - SKEW_SECONDS <= Math.floor(Date.now() / 1000);
+    }
+
+    // Sayfanın KENDİ tokenRefresh akışını tetikle. Bunu doğrudan çağıramayız
+    // (refresh token bizde değil), ama sayfanın viewModel'i üzerinden
+    // tetiklenebiliyor. Tutmazsa sessizce geçilir; çağıran zaten bekleyecek.
+    function nudgeTokenRefresh() {
+        try {
+            if (typeof appViewModel === "undefined") return false;
+            // OSM'in oturum katmanı: adı sürümle değişebildiği için birkaç
+            // bilinen giriş noktası denenir.
+            const candidates = [
+                appViewModel.refreshToken,
+                appViewModel.tokenRefresh,
+                appViewModel.session && appViewModel.session.refreshToken
+            ];
+            for (const fn of candidates) {
+                if (typeof fn === "function") {
+                    fn.call(appViewModel);
+                    return true;
+                }
+            }
+        } catch (e) {}
+        return false;
+    }
+
+    // Taze token bekle: sayfanın yeni bir istek atıp captureBearer'ı
+    // tetiklemesini bekliyoruz. maxMs dolarsa elimizdekiyle devam edilir.
+    async function waitForFreshToken(maxMs) {
+        const deadline = Date.now() + maxMs;
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 250));
+            if (!isTokenStale(window.__OSM_TOKEN)) return true;
+        }
+        return false;
+    }
+
+    // ======================
     // VİDEO WATCHED / ÖDÜL API TAKİBİ
     // ======================
 
@@ -190,6 +259,16 @@
                 token = window.__OSM_TOKEN;
             }
         }
+
+        // PROAKTİF: token'ın süresi dolmuşsa göndermeden önce tazelemeyi dene.
+        // Bayat token'la istek atmak kesin 401; beklemek daha ucuz.
+        if (isTokenStale(token)) {
+            console.warn("[OSM] Token bayat, tazeleniyor...");
+            nudgeTokenRefresh();
+            await waitForFreshToken(5000);
+            token = window.__OSM_TOKEN;
+        }
+
         if (!token) {
             console.warn("[OSM] Bearer token yakalanmadı; API çağrısı atlanıyor.");
             return { ok: false, status: 401, text: null, error: "no_token" };
@@ -197,34 +276,82 @@
 
         const isGet = String(method).toUpperCase() === "GET";
 
-        const headers = {
-            "accept": "application/json; charset=utf-8",
-            "appversion": "3.254.0",
-            "platformid": "11",
-            "authorization": "Bearer " + token
+        const buildHeaders = (tok) => {
+            const h = {
+                "accept": "application/json; charset=utf-8",
+                "appversion": "3.254.0",
+                "platformid": "11",
+                "authorization": "Bearer " + tok
+            };
+            // GET'te gövde ve content-type gönderilmez; bazı uçlar buna 400 döner.
+            if (!isGet) {
+                h["content-type"] = "application/x-www-form-urlencoded; charset=UTF-8";
+            }
+            return h;
         };
 
-        // GET'te gövde ve content-type gönderilmez; bazı uçlar buna 400 döner.
-        if (!isGet) {
-            headers["content-type"] = "application/x-www-form-urlencoded; charset=UTF-8";
+        // Tek istek denemesi. CORS bloğu fetch'i exception'a çevirdiği için
+        // 401 bazen status=0 olarak görünür (sunucu 401'de CORS header'ı
+        // eklemeden reddediyor, tarayıcı "CORS engeli" diye raporluyor).
+        // O yüzden status 0 da kimlik hatası adayı sayılır.
+        const attempt = async (tok) => {
+            try {
+                // originalFetch: kendi hook'umuzu tetikleyip sahte
+                // OSM_API_RESPONSE mesajı üretmesin diye ham fetch kullanılır.
+                const response = await originalFetch(endpoint, {
+                    method: isGet ? "GET" : method,
+                    headers: buildHeaders(tok),
+                    body: isGet ? undefined : body,
+                    mode: "cors"
+                });
+                const text = await response.text();
+                console.log("[OSM] API yanıtı (" + response.status + "):", endpoint, text);
+                return { ok: response.ok, status: response.status, text: text };
+            } catch (e) {
+                console.error("[OSM] API çağrısı başarısız:", e.message);
+                return { ok: false, status: 0, text: null, error: e.message };
+            }
+        };
+
+        let result = await attempt(token);
+
+        // REAKTİF: 401 (ya da CORS'a dönüşmüş hali) geldiyse elimizdeki token
+        // ölmüş demektir. Onu ATIP tazelemeyi bekle ve BİR KEZ tekrar dene.
+        // Eskiden bu yapılmadığı için bayat token sonsuza kadar gönderiliyor,
+        // otomasyon "çalışıyor" görünürken hiç ödül alamıyordu.
+        const looksAuthFailure = result.status === 401 || result.status === 0;
+
+        if (looksAuthFailure && !result.__retried) {
+            const dead = window.__OSM_TOKEN;
+            console.warn("[OSM] " + result.status + " alındı; token geçersiz sayılıp yenileniyor.");
+
+            // Bayat token'ı düşür ki captureBearer yenisini "yeni" görsün.
+            window.__OSM_TOKEN = null;
+            nudgeTokenRefresh();
+
+            // Sayfanın yeni token'ı yakalanana kadar bekle. Gelmezse eskisini
+            // geri koyup pes ederiz — token'sız kalmak durumu kötüleştirir.
+            const deadline = Date.now() + 8000;
+            let fresh = null;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 250));
+                if (window.__OSM_TOKEN && window.__OSM_TOKEN !== dead) {
+                    fresh = window.__OSM_TOKEN;
+                    break;
+                }
+            }
+
+            if (fresh) {
+                console.log("[OSM] Yeni token alındı, istek tekrarlanıyor.");
+                result = await attempt(fresh);
+                result.__retried = true;
+            } else {
+                window.__OSM_TOKEN = dead;   // yenisi gelmedi, eskisi kalsın
+                console.warn("[OSM] Token yenilenemedi; sayfa etkin değil olabilir.");
+            }
         }
 
-        try {
-            // originalFetch: kendi hook'umuzu tetikleyip sahte OSM_API_RESPONSE
-            // mesajı üretmesin diye ham fetch kullanılır.
-            const response = await originalFetch(endpoint, {
-                method: isGet ? "GET" : method,
-                headers: headers,
-                body: isGet ? undefined : body,
-                mode: "cors"
-            });
-            const text = await response.text();
-            console.log("[OSM] API yanıtı (" + response.status + "):", endpoint, text);
-            return { ok: response.ok, status: response.status, text: text };
-        } catch (e) {
-            console.error("[OSM] API çağrısı başarısız:", e.message);
-            return { ok: false, status: 0, text: null, error: e.message };
-        }
+        return result;
     }
 
     // ======================

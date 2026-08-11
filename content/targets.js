@@ -209,7 +209,15 @@ const TargetContext = {
         }));
 
         await Storage.set({ ctxTrainingSessions: this.trainingSessions });
-        Logger.info(`Antrenman slotları: ${this.sessionDetails.map(d => d.title).join(", ")}`);
+
+        // Slot listesi panelde bilgi olarak gösterilir; tik atılmamış hedef için
+        // bunu log'a basmak kullanıcıya "çalışıyorum" izlenimi veriyordu. Log
+        // yalnızca liste gerçekten DEĞİŞTİĞİNDE basılır.
+        const sig = this.sessionDetails.map(d => d.id).join(",");
+        if (sig !== this._lastSessionSig) {
+            this._lastSessionSig = sig;
+            Logger.info(`Antrenman slotları: ${this.sessionDetails.map(d => d.title).join(", ")}`);
+        }
 
         // Panel alt listeyi bu olayla doldurur.
         document.dispatchEvent(new CustomEvent("osm:sessionsUpdated", {
@@ -220,6 +228,9 @@ const TargetContext = {
     },
 
     sessionDetails: [],
+
+    // Slot listesinin son hali (id imzası). Log yalnızca liste değişince basılır.
+    _lastSessionSig: null,
 
     // Kullanıcının panelde işaretlediği slotlar. Boş dizi = "hepsi" (kullanıcı
     // henüz seçim yapmadı); böylece varsayılan davranış eskisiyle aynı kalır.
@@ -290,11 +301,16 @@ const TargetTimers = {
     // panelde o gösterilir. Kaynak: videos/start yanıtı.
     capUntil: {},
 
+    // Cap'i dolmuş ama timers'ta kendi sayacı olmayan hedefler (BusinessClub)
+    // için "hazır" işareti. Yeni cap gelince silinir.
+    readySince: {},
+
     setCap(key, timestampSeconds) {
         if (!timestampSeconds) {
             delete this.capUntil[key];
         } else {
             this.capUntil[key] = timestampSeconds;
+            delete this.readySince[key];   // yeni cap geldi, artık hazır değil
         }
         // Sayfa yenilenince kaybolmasın: cap yalnızca hedef denendiğinde
         // öğrenilebiliyor (videos/start yanıtı), her yüklemede yeniden
@@ -407,10 +423,16 @@ const TargetTimers = {
             const left = cap * 1000 - Date.now();
             if (left > 0) return left;
             delete this.capUntil[key];   // süresi doldu, temizle
+            // Cap'in dolması "artık hazır" demektir. Kendi süresi (remaining)
+            // olmayan hedefler için bunu HATIRLAMAK gerekir: BusinessClub
+            // timers listesinde yok, cap silindikten sonraki tick'te satır
+            // "--:--:--"a düşüyordu. Yeni cap gelene kadar hazır sayılır.
+            this.readySince[key] = Date.now();
         }
 
         const r = this.remaining[key];
-        if (!r) return null;
+        // Cap'i dolmuş ama kendi sayacı olmayan hedef (BusinessClub) hazırdır.
+        if (!r) return this.readySince[key] ? 0 : null;
         // Sunucu saatiyle yerel saat kayabilir; farkı sabitleyip yerelde sayarız.
         const skew = r.serverNow ? (Date.now() / 1000 - r.serverNow) : 0;
         const left = (r.finishedTimestamp - (Date.now() / 1000 - skew)) * 1000;

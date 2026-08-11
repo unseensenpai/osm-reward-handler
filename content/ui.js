@@ -8,7 +8,6 @@ const UI = {
     retryButton: null,
     adCounter: null,
     statusLabel: null,
-    countdownLabel: null,
     currentStatusKey: null,
     bypassCheck: null,
     bypassText: null,
@@ -94,18 +93,6 @@ const UI = {
 
             </div>
 
-            <div class="osm-section">
-
-                <div class="osm-label" id="osm-label-countdown">
-                    ${ContentI18N.t('labelCountdown')}
-                </div>
-
-                <div id="osm-countdown">
-                    --:--:--
-                </div>
-
-            </div>
-
             <div style="display:flex; gap:6px;">
                 <button id="osm-start-btn" style="flex:1; border:none; border-radius:6px; padding:10px; cursor:pointer; font-weight:bold; color:white; background:#27ae60;">
                     ${ContentI18N.t('btnPanelStart')}
@@ -150,8 +137,6 @@ const UI = {
 
         this.status = panel.querySelector("#osm-status");
         this.statusLabel = panel.querySelector("#osm-label-status");
-        this.countdown = panel.querySelector("#osm-countdown");
-        this.countdownLabel = panel.querySelector("#osm-label-countdown");
         this.startButton = panel.querySelector("#osm-start-btn");
         this.stopButton = panel.querySelector("#osm-stop-btn");
         this.retryButton = panel.querySelector("#osm-retry-btn");
@@ -178,7 +163,6 @@ const UI = {
 
     refreshLang() {
         if (this.statusLabel) this.statusLabel.textContent = ContentI18N.t('labelStatus');
-        if (this.countdownLabel) this.countdownLabel.textContent = ContentI18N.t('labelCountdown');
         if (this.startButton) this.startButton.textContent = ContentI18N.t('btnPanelStart');
         if (this.stopButton) this.stopButton.textContent = ContentI18N.t('btnPanelStop');
         if (this.retryButton) this.retryButton.textContent = ContentI18N.t('btnRetry');
@@ -612,7 +596,9 @@ const UI = {
         const tick = () => {
             if (typeof TargetTimers === "undefined" || !this.panel) return;
 
-            let soonest = null;   // seçili hedefler arasında en küçük süre
+            // Üst sayaç v3.4.1'de kaldırıldı: her hedef kendi süresini kendi
+            // satırında gösterir. "En küçüğü bul, üste yaz" mantığı kaynak
+            // null dönünce sessizce yazmayı bırakıp sayacı donduruyordu.
 
             this.panel.querySelectorAll(".osm-target-row").forEach(row => {
                 const key = row.dataset.target;
@@ -639,19 +625,7 @@ const UI = {
                     cell.classList.remove("osm-target-ready");
                 }
 
-                // Üstteki büyük sayaç, seçili hedeflerin EN KÜÇÜĞÜNÜ gösterir:
-                // "bir sonraki fırsat ne zaman" sorusunun cevabı bu.
-                const box = row.querySelector(".osm-target-check");
-                if (box && box.checked && ms !== null && ms > 0) {
-                    if (soonest === null || ms < soonest) soonest = ms;
-                }
             });
-
-            // Ban sayacı (Timer.resume) önceliklidir; o çalışıyorsa dokunma.
-            // Aksi halde üst sayaç satırlardaki EN KÜÇÜK süreyi gösterir.
-            if (soonest !== null && !this.banCountdownActive) {
-                this.setCountdown(this.formatCountdown(soonest));
-            }
 
             // Açık slot listesindeki süreler de aksın.
             this.panel.querySelectorAll(".osm-slot-row").forEach(r => {
@@ -819,9 +793,10 @@ const UI = {
         if (this.delayText) this.delayText.textContent = ContentI18N.tVar('modalCloseDelayLabel', { ms });
     },
 
-    // BusinessClub sayfasında değilsek oraya yönlendirir. true dönerse çağıran
-    // RETURN etmeli (sayfa değişecek, devam etme). Reklam butonu yalnızca
-    // BusinessClub'da olduğu için başka sayfada başlatmak boşa döner.
+    // Sayfa yönlendirmesi TEK bir durumda gerekir: Modal Odak Kaybı modu.
+    // O mod reklam modalını DOM'dan kapattığı için BusinessClub sayfasında
+    // olmak zorunda. Diğer her şey (BC dahil tüm hedefler) saf API ile
+    // çalışır, sayfa fark etmez. true dönerse çağıran RETURN etmeli.
     redirectToBusinessClubIfNeeded() {
         const isBusinessClub = window.location.href.toLowerCase().includes("businessclub");
         if (isBusinessClub) return false;
@@ -867,36 +842,10 @@ const UI = {
 
     },
 
-    startCountdown(minutes) {
-
-        if (this.countdownInterval)
-            clearInterval(this.countdownInterval);
-
-        // Ban geri sayımı üst sayacı sahiplenir; hedef satırlarından beslenen
-        // tick bu sırada araya girmemeli.
-        this.banCountdownActive = true;
-
-        const targetTime = Date.now() + (minutes * 60 * 1000);
-
-        this.countdownInterval = setInterval(() => {
-
-            const remaining = targetTime - Date.now();
-
-            if (remaining <= 0) {
-
-                clearInterval(this.countdownInterval);
-                this.countdownInterval = null;
-                this.banCountdownActive = false;
-                this.setCountdown("00:00:00");
-                return;
-
-            }
-
-            this.setCountdown(this.formatCountdown(remaining));
-
-        }, 1000);
-
-    },
+    // Üst sayaç kaldırıldığı için ban geri sayımının yazacağı yer kalmadı.
+    // Ban süresi artık popup'ta (kendi timer'ı, storage.targetTime'dan besleniyor)
+    // ve panelde durum yazısında görünür. Çağrı noktaları duruyor; boş bırakılır.
+    startCountdown() {},
 
     formatCountdown(ms) {
 
@@ -954,14 +903,10 @@ const UI = {
         this.adCounter.textContent = ContentI18N.tVar('panelAdCounter', { current });
     },
 
-    setCountdown(text) {
-
-        if (!this.countdown)
-            return;
-
-        this.countdown.textContent = text;
-
-    },
+    // Üst sayaç v3.4.1'de kaldırıldı (her hedef kendi satırında sayıyor).
+    // Çağıranlar (timer.js ban geri sayımı, content.js) duruyor; burada
+    // sessizce yutulur ki ban akışı bozulmasın.
+    setCountdown() {},
 
     setPaused(paused) {
 
