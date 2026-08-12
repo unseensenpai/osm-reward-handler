@@ -562,4 +562,101 @@
         }
     });
 
+    // ======================
+    // SAYFA GÖSTERGESİ TAZELEME (antrenman / scout / birikimler)
+    // ======================
+    // Cüzdanda işe yarayan yöntemin genel hali. BusinessClub'da ekranı
+    // updateWallet tazeliyordu; antrenman süresi ve scout sayacı BAŞKA
+    // partial'larda yaşıyor. Sayfa yenilemek yerine o partial'ın kendi
+    // yükleme fonksiyonu çağrılır — F5 döngüyü öldürüyordu (v3.4.1 regresyonu).
+    //
+    // Partial adı sayfaya göre değiştiği için sabit isim yerine viewModel
+    // üzerinde ARANIR: önce bilinen adaylar, sonra ada göre eşleşen ilk
+    // fonksiyon. Bulunamazsa sessizce çıkar (çağıran yine de çalışmaya devam
+    // eder; gösterge bir sonraki timers poll'unda tazelenir).
+    const REFRESH_TARGETS = {
+        training: [
+            "trainingsPartial", "trainingPartial", "trainingSessionsPartial",
+            "squadPartial"
+        ],
+        scout: [
+            "scoutingPartial", "scoutPartial"
+        ],
+        multistep: [
+            "rewardsPartial", "dailyRewardPartial", "bossCoinWalletPartial"
+        ]
+    };
+
+    const RELOAD_FN = /^(reload|refresh|load|update|init|fetch|get)/;
+
+    function refreshPartial(names) {
+        if (typeof appViewModel === "undefined") return false;
+
+        for (const name of names) {
+            try {
+                const holder = appViewModel[name];
+                if (typeof holder !== "function") continue;
+
+                // Knockout observable: çağırınca partial nesnesini döndürür.
+                const partial = holder();
+                if (!partial) continue;
+
+                // Object.keys yalnızca KENDİ alanlarını verir; viewModel
+                // fonksiyonları sık sık prototip üzerinde tanımlı oluyor.
+                // Prototip zincirini de tara, tekrarları ele.
+                const keys = new Set();
+                for (let o = partial; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+                    Object.getOwnPropertyNames(o).forEach(k => keys.add(k));
+                }
+
+                for (const key of keys) {
+                    if (!RELOAD_FN.test(key)) continue;
+
+                    // Alan okumak getter tetikleyebilir ve o getter atabilir;
+                    // tek bir anahtar yüzünden aday partial'ı kaybetmeyelim.
+                    let fn;
+                    try {
+                        fn = partial[key];
+                    } catch (err) { continue; }
+
+                    if (typeof fn !== "function") continue;
+                    // Argüman bekleyen fonksiyonu çağırmayız: veriyi biz
+                    // bilmiyoruz, yanlış argüman ekranı bozabilir.
+                    if (fn.length > 0) continue;
+
+                    try {
+                        fn.call(partial);
+                    } catch (err) { continue; }
+
+                    console.log(`[OSM] Gösterge tazelendi: ${name}.${key}()`);
+                    return true;
+                }
+            } catch (err) {
+                // Bu aday tutmadı, sıradakine geç.
+            }
+        }
+        return false;
+    }
+
+    window.addEventListener("message", (e) => {
+        if (!e.data || e.data.type !== "__OSM_REFRESH_VIEW") return;
+
+        const names = REFRESH_TARGETS[e.data.target] || [];
+        if (refreshPartial(names)) return;
+
+        // Hedefe özel partial bulunamadı: sayfanın genel tazeleyicisini dene.
+        try {
+            for (const key of ["refreshPage", "reload", "refresh", "loadData"]) {
+                if (typeof appViewModel[key] === "function" &&
+                    appViewModel[key].length === 0) {
+                    appViewModel[key]();
+                    console.log(`[OSM] Gösterge tazelendi: appViewModel.${key}()`);
+                    return;
+                }
+            }
+        } catch (err) {}
+
+        console.log(`[OSM] ${e.data.target} için tazeleme fonksiyonu bulunamadı.`);
+    });
+
 })();

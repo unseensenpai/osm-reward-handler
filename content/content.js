@@ -86,6 +86,17 @@ if (typeof IframeHandler !== "undefined") {
     // Storage durumuna göre UI'ı ayarla
     const state = await Storage.get(["automationStarted", "botPaused", "isBanned", "targetTime"]);
 
+    // API modunda global ban geçerli değil: bekleme hedef bazında tutulur ve
+    // BusinessClub cap'teyken bile antrenman/scout dönebilmeli. Bayrağı da
+    // temizleriz, yoksa modal modundan kalma bayat bir değer API modunu
+    // sonsuza kadar bloke ediyordu.
+    const modePrefs = await Storage.get(["bypassMode"]);
+
+    if (state.isBanned && modePrefs.bypassMode) {
+        await Storage.set({ isBanned: false, targetTime: null });
+        state.isBanned = false;
+    }
+
     if (state.isBanned) {
 
         if (state.targetTime && state.targetTime <= Date.now()) {

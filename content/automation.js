@@ -49,7 +49,10 @@ const Automation = {
             return;
         }
 
-        if (state.isBanned) {
+        // Global ban yalnızca modal modlarını bağlar. API modunda bekleme
+        // hedef bazındadır; burada return edilirse ödül sonrası yenilemeden
+        // dönen sayfa otomasyonu bir daha başlatamıyordu (döngü kalıcı ölürdü).
+        if (state.isBanned && !this.bypassMode) {
             Logger.warning("Bekleme süresi devam ediyor.");
             UI.setStatus("statusWaiting");
             UI.setCooldown();
@@ -291,15 +294,39 @@ const Automation = {
         enabled.forEach(t => state[t.key] = { done: 0, blockedUntil: 0 });
 
         while (true) {
-            const s = await Storage.get(["botPaused", "isBanned"]);
+            const s = await Storage.get(["botPaused"]);
             if (s.botPaused) { UI.setStatus("statusPaused"); return; }
-            if (s.isBanned) { Logger.info("Ban işliyor, döngü duruyor."); return; }
 
+            // DİKKAT: isBanned burada KONTROL EDİLMEZ. O bayrak modal
+            // modlarına ait, global ve hedef ayrımı yok. Burada okunursa tek
+            // bir hedefin (ör. BusinessClub) cap'i tüm motoru durduruyor,
+            // hazır olan antrenman/scout hedeflerine hiç sıra gelmiyordu.
+            // Çok hedefli motorda bekleme hedef bazında tutulur:
+            // state[key].blockedUntil + TargetTimers.capUntil.
             const now = Date.now();
 
             // Elle tetiklenen hedef sıraya kaynar: beklemesi iptal edilir.
             for (const key of this._manualRetry) {
                 if (state[key]) state[key].blockedUntil = 0;
+            }
+
+            // Antrenman hedefi slot listesi boşken seçilemez. Liste yalnızca
+            // sunucudan öğreniliyor ve döngü içinde tazeleyen kimse yoktu:
+            // sayfa antrenman slotu bilinmeden açıldıysa hedef sonsuza kadar
+            // atlanıyordu. Sırası gelmeden önce tazelemeyi dene.
+            //
+            // DİKKAT: en az 30sn arayla. Tazeleme başarısız olursa (lig/takım
+            // henüz bilinmiyor) döngü her turda yeniden dener ve saniyede
+            // onlarca istek atardı.
+            if (now - this._lastSessionRefresh > 30000) {
+                for (const t of enabled) {
+                    if (!t.needsSession) continue;
+                    if (state[t.key].blockedUntil > now) continue;
+                    if (TargetContext.ready(t)) continue;
+                    this._lastSessionRefresh = now;
+                    await TargetContext.refreshTrainingSessions();
+                    break;
+                }
             }
 
             const pickable = (t) => {
@@ -330,8 +357,28 @@ const Automation = {
                     .filter(v => v > now);
 
                 if (waiting.length === 0) {
-                    // Bekleyen yok, sadece hakkı bitenler var (günlük limit).
-                    // Gün dönümüne kadar sürecek; döngüyü kapat.
+                    // Bekleyen sayaç yok. Sebep iki türlü olabilir:
+                    //
+                    //  a) Günlük hak bitti (gerçekten yapacak iş yok)
+                    //  b) Bağlam henüz hazır değil (lig/takım/slot bilinmiyor)
+                    //
+                    // (b) durumunda döngüyü kapatmak YANLIŞTI: BusinessClub
+                    // sınırsızdır ve bağlam birkaç saniye içinde öğreniliyor.
+                    // Sayfa açılırken bir kez bile bağlam gecikse otomasyon
+                    // kendini kapatıp "automationStarted: false" yazıyordu.
+                    const bcEnabled = enabled.some(t => t.key === "businessClub");
+
+                    if (bcEnabled) {
+                        // BusinessClub seçiliyse döngü ASLA kapanmaz: bağlam
+                        // hazır olana kadar kısa aralıkla tekrar dener.
+                        Logger.info("Bağlam hazır değil, 15 saniye sonra tekrar denenecek.");
+                        UI.setStatus("statusWaiting");
+                        UI.setStarted();
+                        if (!(await this.sleepUntil(Date.now() + 15000))) continue;
+                        UI.setStatus("statusRunning");
+                        continue;
+                    }
+
                     Logger.info("Tüm hedeflerin hakkı doldu.");
                     UI.setStatus("statusIdle");
                     UI.setStopped();
@@ -394,21 +441,17 @@ const Automation = {
             }
 
             if (result.ok) {
+                // API çalışıyor: birikmiş hata sayacını sıfırla, yoksa saatler
+                // içinde dağınık 3 hata modal taktiğini boşuna tetiklerdi.
+                this.consecutiveApiFails = 0;
+
                 state[target.key].done++;
                 await this.recordReward();
                 Logger.success(`${target.key}: ödül alındı (${state[target.key].done}. tur).`);
 
-                // BC dışı hedefte ödül alındıysa sayfa yenilenir: antrenman
-                // süresi / para göstergesi ancak böyle güncelleniyor. Ödül
-                // kaydedildikten SONRA yenilenir ki sayaç kaybolmasın.
-                if (this.pendingReload) {
-                    this.pendingReload = false;
-                    Logger.info("Veriler tazeleniyor, sayfa yenileniyor...");
-                    await this.delay(1500);
-                    location.reload();
-                    return;
-                }
-
+                // Not: burada ARTIK sayfa yenilenmiyor. Gösterge tazeleme
+                // runTargetCycle içinde F5'siz yapılıyor (refreshPageView).
+                // Eski location.reload() döngüyü kalıcı olarak öldürüyordu.
                 await this.delay(3000);
             } else {
                 // Kimlik hatası (401 / token yenilenemedi) GEÇİCİDİR ve hedefe
@@ -422,6 +465,15 @@ const Automation = {
                 Logger.warning(result.authFailure
                     ? `${target.key}: kimlik hatası, 10 saniye sonra tekrar denenecek.`
                     : `${target.key}: başarısız, 1 dakika atlanıyor.`);
+
+                // Kimlik ÜST ÜSTE düzelmiyorsa (token akışı tamamen bozuk) API
+                // ile hiçbir ödül alınamaz; sonsuza kadar 10sn'de bir denemek
+                // yerine modal taktiğine düş. Bu emniyet apiAdLoop'la birlikte
+                // kaybolmuştu. Yalnızca BusinessClub'da anlamlı: modal sadece
+                // orada var. Başarılı tur sayacı sıfırlar (runTargetCycle).
+                if (result.authFailure && target.key === "businessClub") {
+                    if (await this.bypassFallbackOrGiveUp()) return;
+                }
             }
         }
     },
@@ -429,6 +481,11 @@ const Automation = {
     // Satır başına "şimdi dene": o hedefin bekleme kaydını siler, döngü bir
     // sonraki turda onu tekrar dener. Döngü çalışmıyorsa tek tur çalıştırır.
     _manualRetry: new Set(),
+
+    // Antrenman slot listesinin son tazelenme zamanı. Döngü, hedef hazır
+    // değilken tazelemeyi dener; bu damga istek selini önler (bkz.
+    // multiTargetLoop içindeki 30sn kapısı).
+    _lastSessionRefresh: 0,
 
     installRetryListener() {
         if (this._retryListenerInstalled) return;
@@ -559,9 +616,12 @@ const Automation = {
 
     // Tur ortasında duraklatma/ban kontrolü. Bir tur ~5 saniye sürüyor;
     // yalnızca tur başında bakılırsa Durdur'a basınca geç tepki veriyor.
+    // isBanned BİLEREK okunmaz: bu bayrak modal modlarının global cooldown'ı.
+    // API modunda cap hedef bazında tutuluyor ve BusinessClub cap'e girdiğinde
+    // sürmekte olan antrenman/scout turunun yarıda kesilmesi için sebep değil.
     async isPaused() {
-        const s = await Storage.get(["botPaused", "isBanned"]);
-        return !!(s.botPaused || s.isBanned);
+        const s = await Storage.get(["botPaused"]);
+        return !!s.botPaused;
     },
 
     // Panelde işaretli hedefleri Targets.order sırasında döndürür.
@@ -684,115 +744,42 @@ const Automation = {
             return { ok: true };
         }
 
-        // Diğer hedefler (antrenman, scout, birikimler): ödül alındıktan sonra
-        // ekranda güncellenmesi gereken şey cüzdan DEĞİL — antrenman süresi
-        // kısalıyor, para/puan değişiyor. Bunların sayfa içi tazeleme yolu yok,
-        // o yüzden sayfayı yenileriz ki son veriler gelsin. Yenileme döngüyü
-        // kesmez: content.js yeniden yüklenip otomasyonu kaldığı yerden sürdürür.
-        this.pendingReload = true;
+        // Diğer hedefler (antrenman, scout, birikimler): ekranda güncellenmesi
+        // gereken şey cüzdan DEĞİL — antrenman süresi kısalıyor, puan değişiyor.
+        //
+        // ESKİDEN sayfa yenileniyordu (pendingReload). Yorumda "yenileme döngüyü
+        // kesmez" yazıyordu ama KESİYORDU: reload sonrası start() bayat
+        // isBanned'e takılıp return ediyor, otomasyon bir daha başlamıyordu.
+        // Reklam izleme bu yüzden durmuştu. Artık cüzdandaki yöntemin aynısı:
+        // sayfanın kendi partial'ı F5'siz tazelenir.
+        this.refreshPageView(target.key);
+
+        // Antrenman kısaltıldı: slot süreleri değişti, listeyi sunucudan tazele
+        // ki bir sonraki tur güncel slotla çalışsın ve panel doğru göstersin.
+        if (target.needsSession) {
+            await TargetContext.refreshTrainingSessions();
+        }
 
         return { ok: true };
     },
 
     // ======================
-    // API BYPASS DÖNGÜSÜ
+    // API BYPASS YARDIMCILARI
     // ======================
 
-    // API Bypass: start -> (bekle) -> watched -> consumereward. 401/başarısızlıkta
-    // Modal Odak Kaybı taktiğine düşer (auth şu an 401 dönüyor). Cap dolarsa
-    // timestampUntilUnreached ile TAM süreyi timer'a verir.
-    async apiAdLoop() {
-        Logger.info("API Bypass döngüsü başladı.");
-        this.consecutiveApiFails = 0;
-        const CYCLE_DELAY = 3000;
+    // NOT: Eski tek hedefli apiAdLoop KALDIRILDI. Artık bypass modunda da
+    // multiTargetLoop çalışıyor (bkz. start()). Eski döngü BusinessClub cap'e
+    // takılınca return ediyor, seçili diğer hedeflere hiç sıra gelmiyordu;
+    // ayrıca kendi Timer.start(minutes) çağrısıyla global isBanned yazıyordu —
+    // ödül döngüsünü kilitleyen asıl sebep buydu.
+    //
+    // apiAdLoop'a özgü sabit-URL yardımcıları (callVideoStart/callWatched/
+    // callClaimReward) da silindi: hepsi actionId'yi "BusinessClub" olarak
+    // sabitliyordu, çok hedefli motorda yanlış olurdu. runTargetCycle bu
+    // çağrıları hedefin kendi actionId/consumePath'iyle yapıyor.
 
-        while (true) {
-            const state = await Storage.get(["botPaused", "isBanned", "bypassMode"]);
-            if (!state.bypassMode) {
-                this.bypassMode = false;
-                Logger.info("Bypass kapatıldı, modal döngüsüne geçiliyor.");
-                this.modalLoop();
-                return;
-            }
-            if (state.botPaused) { UI.setStatus("statusPaused"); return; }
-            if (state.isBanned) { Logger.info("Ban işliyor, bypass duruyor."); return; }
-
-            UI.setStatus("statusAdWatching");
-            UI.setAdCounter(this.currentAdCount + 1);
-
-            const startResponse = await this.callVideoStart();
-            if (!startResponse) {
-                if (await this.bypassFallbackOrGiveUp()) return;
-                continue;
-            }
-            this.consecutiveApiFails = 0;
-
-            // Cap: TAM süreyi API'den al.
-            if (startResponse.isCapReached === true && startResponse.timestampUntilUnreached) {
-                // Satır geri sayımı da dolsun: eski tek hedefli döngü paneli
-                // yalnızca üstteki genel sayaca yazıyordu, BusinessClub satırı
-                // boş kalıyordu.
-                if (typeof TargetTimers !== "undefined") {
-                    TargetTimers.setCap("businessClub", startResponse.timestampUntilUnreached);
-                }
-
-                const now = Math.floor(Date.now() / 1000);
-                const remaining = startResponse.timestampUntilUnreached - now;
-                if (remaining > 0) {
-                    const minutes = Math.ceil(remaining / 60);
-                    Logger.warning(`Cap dolu, ${minutes} dakika (API) bekleniyor.`);
-                    UI.setStatus("statusWaiting");
-                    UI.setCooldown();
-                    await Timer.start(minutes);
-                    return;
-                }
-            }
-
-            await this.delay(1500);
-
-            const watchedResponse = await this.callWatched();
-            const rewardId = this.extractRewardId(watchedResponse);
-            if (!rewardId) {
-                Logger.warning("watched yanıtından rewardId çıkarılamadı; tur atlanıyor.");
-                if (await this.bypassFallbackOrGiveUp()) return;
-                continue;
-            }
-            Logger.info(`rewardId alındı: ${rewardId}, consume ediliyor.`);
-
-            const claim = await this.callClaimReward(rewardId);
-            if (!claim) {
-                Logger.warning("consumereward başarısız; puan birikmesin diye tur atlanıyor.");
-                if (await this.bypassFallbackOrGiveUp()) return;
-                continue;
-            }
-
-            // TEŞHİS: consume yanıtı cüzdan durumu döndürüyor (amount = toplam
-            // boss coin, unclaimedCoins = talep edilmemiş, nextClaimTimestamp =
-            // sıradaki claim zamanı). Bunlar tur tur değişiyor mu görmek için
-            // logla — zaman-kapısı teorisini doğrular/çürütür.
-            if (claim && typeof claim === "object") {
-                const now = Math.floor(Date.now() / 1000);
-                const next = claim.nextClaimTimestamp;
-                const gate = (typeof next === "number")
-                    ? (next > now ? `KAPALI (${next - now}sn sonra)` : "AÇIK")
-                    : "?";
-                Logger.info(`Cüzdan: amount=${claim.amount} unclaimed=${claim.unclaimedCoins} nextClaim=${gate}`);
-
-                // Ekrandaki boss coin göstergesini sayfanın KENDİ fonksiyonuyla
-                // güncelle (consume yanıtı zaten cüzdan verisi). API bypass'ta
-                // sayfa bunu kendi çağırmıyor, o yüzden biz tetikliyoruz.
-                this.refreshPageWallet(claim);
-            }
-
-            this.consecutiveApiFails = 0;
-            await this.recordReward();
-            Logger.success("API ile ödül alındı.");
-            await this.delay(CYCLE_DELAY);
-        }
-    },
-
-    // Bypass hatası: 3 kez üst üste başarısızsa Modal Odak Kaybı taktiğine düş
-    // (auth çalışmıyor). true dönerse çağıran döngü RETURN etmeli.
+    // API üst üste başarısızsa (kimlik çalışmıyor) Modal Odak Kaybı taktiğine
+    // düşer. true dönerse çağıran döngü RETURN etmeli: kontrolü modalLoop aldı.
     async bypassFallbackOrGiveUp() {
         this.consecutiveApiFails++;
         Logger.warning(`Bypass API başarısız (${this.consecutiveApiFails}. kez).`);
@@ -805,27 +792,6 @@ const Automation = {
         }
         await this.delay(3000);
         return false;
-    },
-
-    async callVideoStart() {
-        return this.callApi(
-            "https://web-api.onlinesoccermanager.com/api/v1.1/user/videos/start",
-            "actionId=BusinessClub&capVariation=0"
-        );
-    },
-
-    async callWatched() {
-        return this.callApi(
-            "https://web-api.onlinesoccermanager.com/api/v1.1/user/videos/watched",
-            "actionId=BusinessClub&rewardVariation=0&capVariation=0"
-        );
-    },
-
-    async callClaimReward(rewardId) {
-        return this.callApi(
-            "https://web-api.onlinesoccermanager.com/api/v1/user/bosscoinwallet/consumereward",
-            `rewardId=${encodeURIComponent(rewardId)}`
-        );
     },
 
     // watched yanıtından rewardId'yi çıkarır. Yanıtın kesin şekli elimizde yok
@@ -964,6 +930,14 @@ const Automation = {
     // yapılır çünkü appViewModel sayfa scope'unda.
     refreshPageWallet(wallet) {
         window.postMessage({ type: "__OSM_UPDATE_WALLET", wallet: wallet }, "*");
+    },
+
+    // BC dışı hedeflerde (antrenman/scout/birikimler) ekrandaki süre ve puan
+    // göstergesini sayfanın KENDİ partial'ıyla tazeler. Cüzdandaki yöntemin
+    // genel hali; asıl arama inject.js'te yapılır (appViewModel sayfa
+    // scope'unda). Sayfa yenilemenin yerini alır — F5 döngüyü öldürüyordu.
+    refreshPageView(targetKey) {
+        window.postMessage({ type: "__OSM_REFRESH_VIEW", target: targetKey }, "*");
     },
 
     async callApi(endpoint, body, method = "POST") {
