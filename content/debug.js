@@ -15,8 +15,10 @@ const DebugMode = {
     badge: null,
     typed: "",
 
-    // Kayıt sınırı: storage kotasını doldurmasın. En eskiler düşer.
-    MAX_ENTRIES: 200,
+    // Kayıt sınırı: storage kotasını doldurmasın. En eskiler düşer — ama ödül
+    // akışına ait kayıtlar korunur (bkz. evict). Gece boyunca açık kalan bir
+    // sekmede 200 kayıt dakikalar içinde doluyordu; sınır yükseltildi.
+    MAX_ENTRIES: 600,
 
     // Sadece OSM API'si — reklam ağı gürültüsü (Google/doubleclick) alınmaz.
     URL_PATTERN: /onlinesoccermanager\.com\/api\//i,
@@ -29,14 +31,112 @@ const DebugMode = {
 
         this.listenForSecret();
         this.listenForResponses();
+        this.listenForUnload();
 
         if (this.enabled) {
-            Logger.info("🐛 Debug mod açık (kayıtlı durum).");
+            // Önceki oturumların kayıtlarını geri yükle. Kayıtlar YALNIZCA
+            // bellekte tutulduğu sürece her sayfa yenilemesinde siliniyordu;
+            // gece çalışan bir ödül turu (ör. savings günlük yenilenmesi)
+            // sabah bakıldığında kaybolmuş oluyordu.
+            await this.restore();
+
+            Logger.info(`🐛 Debug mod açık (${this.entries.length} kayıt geri yüklendi).`);
             this.showBadge();
             // Sayfa yeni yüklendi; izlemeyi yeniden kur. inject.js hazır
             // olmayabilir, kısa gecikme ile dene.
             setTimeout(() => this.traceViewModel(), 1500);
         }
+    },
+
+    // ======================
+    // KALICILIK
+    // ======================
+    // Ödül turları çoğu zaman kullanıcı başında değilken çalışıyor. Kayıt
+    // bellekte kalırsa tam da teşhis edilmek istenen olay kaybolur.
+
+    STORAGE_KEY: "debugEntries",
+    VM_STORAGE_KEY: "debugVmCalls",
+
+    async restore() {
+        try {
+            const s = await Storage.get([this.STORAGE_KEY, this.VM_STORAGE_KEY]);
+            if (Array.isArray(s[this.STORAGE_KEY])) this.entries = s[this.STORAGE_KEY];
+            if (Array.isArray(s[this.VM_STORAGE_KEY])) this.vmCalls = s[this.VM_STORAGE_KEY];
+        } catch (e) {
+            Logger.warning("🐛 Debug kayıtları geri yüklenemedi.");
+        }
+    },
+
+    // Yazma sık tetikleniyor (her istek); storage'ı boğmamak için geciktir.
+    _saveHandle: null,
+
+    scheduleSave() {
+        if (this._saveHandle) return;
+        this._saveHandle = setTimeout(() => {
+            this._saveHandle = null;
+            this.persist();
+        }, 2000);
+    },
+
+    // chrome.storage.local kotası ~5MB (unlimitedStorage izni yok). Kayıtlar
+    // 4000 karaktere kadar gövde taşıyabildiği için sınıra yaklaşmak mümkün.
+    //
+    // DİKKAT: Storage.set kota hatasını YUTUYOR (resolve ediyor, throw etmiyor),
+    // o yüzden try/catch ile kotayı yakalayamayız. Bunun yerine yazmadan ÖNCE
+    // boyutu ölçüp gerekiyorsa küçültürüz.
+    MAX_BYTES: 3_000_000,
+
+    async persist() {
+        if (!this.enabled) return;
+        await this.persistForce();
+    },
+
+    // Yazılacak veriyi kotaya sığacak hale getirir: önce sıradan kayıtlar,
+    // gerekirse en eski ödül kayıtları düşer. Ödüller son atılan olur.
+    shrinkToFit() {
+        const size = () => {
+            try {
+                return JSON.stringify(this.entries).length + JSON.stringify(this.vmCalls).length;
+            } catch (e) {
+                return 0;
+            }
+        };
+
+        let guard = 0;
+        while (size() > this.MAX_BYTES && guard++ < 50) {
+            const others = this.entries.filter(e => !this.isReward(e));
+            if (others.length > 0) {
+                // En eski sıradan kayıtların dörtte birini at.
+                const drop = new Set(others.slice(0, Math.max(1, Math.ceil(others.length / 4))));
+                this.entries = this.entries.filter(e => !drop.has(e));
+                continue;
+            }
+            if (this.vmCalls.length > 0) {
+                this.vmCalls.splice(0, Math.ceil(this.vmCalls.length / 2));
+                continue;
+            }
+            // Yalnızca ödül kayıtları kaldı: en eskileri at.
+            this.entries.splice(0, Math.max(1, Math.ceil(this.entries.length / 4)));
+        }
+    },
+
+    // Sayfa kapanırken/gizlenirken bekleyen yazmayı hemen tamamla. 2 saniyelik
+    // geciktirme penceresinde sayfa yenilenirse EN SON kayıtlar kaybolurdu —
+    // ödül turu tam da yenilemeden hemen önce olduğu için kritik.
+    listenForUnload() {
+        const flush = () => {
+            if (!this.enabled) return;
+            if (this._saveHandle) {
+                clearTimeout(this._saveHandle);
+                this._saveHandle = null;
+            }
+            this.persistForce();
+        };
+
+        window.addEventListener("pagehide", flush);
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "hidden") flush();
+        });
     },
 
     // Gizli dizi: sayfada "osmdbg" yazılınca modu açar/kapatır. Bir input veya
@@ -65,13 +165,34 @@ const DebugMode = {
         await Storage.set({ debugMode: this.enabled });
 
         if (this.enabled) {
-            Logger.success("🐛 Debug mod AÇILDI — istekler kaydediliyor.");
+            // Daha önce biriktirilmiş kayıtlar varsa geri getir; mod kapatılıp
+            // açıldığında geçmiş kaybolmasın.
+            await this.restore();
+            Logger.success(`🐛 Debug mod AÇILDI — istekler kaydediliyor (${this.entries.length} kayıt mevcut).`);
             this.showBadge();
             this.traceViewModel();
         } else {
-            Logger.info("🐛 Debug mod kapatıldı.");
+            // Kapatırken bekleyen yazma varsa tamamla: son kayıtlar kaybolmasın.
+            if (this._saveHandle) {
+                clearTimeout(this._saveHandle);
+                this._saveHandle = null;
+            }
+            await this.persistForce();
+            Logger.info("🐛 Debug mod kapatıldı (kayıtlar saklandı).");
             this.hideBadge();
         }
+    },
+
+    // persist() enabled kontrolü yapıyor; kapatma anında da yazabilmek için
+    // bayraktan bağımsız hali.
+    async persistForce() {
+        this.shrinkToFit();
+        try {
+            await Storage.set({
+                [this.STORAGE_KEY]: this.entries,
+                [this.VM_STORAGE_KEY]: this.vmCalls
+            });
+        } catch (e) {}
     },
 
     // inject.js'in yayınladığı her API yanıtını yakala. Kapalıyken de dinleyici
@@ -139,6 +260,7 @@ const DebugMode = {
         }
 
         this.updateBadge();
+        this.scheduleSave();
         Logger.info(`🐛 [VM] ${data.name}(${(data.args || []).length} arg)`);
     },
 
@@ -202,16 +324,39 @@ const DebugMode = {
             src: item.source
         });
 
-        if (this.entries.length > this.MAX_ENTRIES) {
-            this.entries.splice(0, this.entries.length - this.MAX_ENTRIES);
-        }
-
+        this.evict();
         this.updateBadge();
+        this.scheduleSave();
 
         // İstek satırı sessiz: yanıt gelince tek satır loglanır.
         if (item.source !== "request") {
             Logger.info(`🐛 ${path} ${item.status ?? ""}`);
         }
+    },
+
+    // Ödül akışına ait kayıtlar (videos/start, watched, consumereward,
+    // caps/sequences) ASLA atılmaz. Sayfa açık kaldığında OSM sürekli istek
+    // atıyor; düz FIFO bunları dakikalar içinde tampondan atıyor ve teşhis
+    // edilmek istenen tur kayboluyordu.
+    REWARD_PATTERN: /videos\/(start|watched)|consumereward|caps\/sequences/i,
+
+    isReward(entry) {
+        return this.REWARD_PATTERN.test(entry.path || "");
+    },
+
+    evict() {
+        if (this.entries.length <= this.MAX_ENTRIES) return;
+
+        const rewards = this.entries.filter(e => this.isReward(e));
+        const others = this.entries.filter(e => !this.isReward(e));
+
+        // Önce sıradan kayıtları at; yine de sığmıyorsa en eski ödülleri at.
+        const room = Math.max(this.MAX_ENTRIES - rewards.length, 0);
+        const keptOthers = others.slice(-room);
+        const keptRewards = rewards.slice(-this.MAX_ENTRIES);
+
+        this.entries = [...keptRewards, ...keptOthers]
+            .sort((a, b) => String(a.t).localeCompare(String(b.t)));
     },
 
     // Token/cookie maskele: çıktı bana yapıştırılacak, oturum sızmamalı.
@@ -277,6 +422,17 @@ const DebugMode = {
         this.entries = [];
         this.vmCalls = [];
         this.updateBadge();
+
+        // Storage'dan da sil: yoksa sayfa yenilenince restore() eskileri
+        // geri getirir ve "temizle" hiçbir işe yaramamış görünür.
+        if (this._saveHandle) {
+            clearTimeout(this._saveHandle);
+            this._saveHandle = null;
+        }
+        try {
+            await Storage.set({ [this.STORAGE_KEY]: [], [this.VM_STORAGE_KEY]: [] });
+        } catch (e) {}
+
         Logger.info("🐛 Debug kayıtları temizlendi.");
     },
 

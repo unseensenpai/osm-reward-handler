@@ -524,6 +524,32 @@
         window.postMessage({ type: "OSM_VM_TRACE_READY", result: result }, "*");
     });
 
+    // Content script açıkça "token'ı tazele" derse: bayat token'ı düşür,
+    // sayfanın kendi yenileme akışını tetikle ve sonucu geri bildir.
+    // Otomasyon bunu modal taktiğine düşmeden ÖNCE dener; tutarsa 401 yüzünden
+    // gereksiz yere modal'a geçilmemiş olur.
+    window.addEventListener("message", async (e) => {
+        if (!e.data || e.data.type !== "__OSM_FORCE_TOKEN_REFRESH") return;
+
+        const dead = window.__OSM_TOKEN;
+        window.__OSM_TOKEN = null;
+        nudgeTokenRefresh();
+
+        // Yeni token bekle: eskisinden FARKLI olmalı.
+        const deadline = Date.now() + 8000;
+        let ok = false;
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 250));
+            if (window.__OSM_TOKEN && window.__OSM_TOKEN !== dead) { ok = true; break; }
+        }
+
+        // Gelmediyse eskisini geri koy: token'sız kalmak durumu kötüleştirir.
+        if (!ok && !window.__OSM_TOKEN) window.__OSM_TOKEN = dead;
+
+        console.log("[OSM] Zorunlu token tazeleme sonucu: " + (ok ? "yeni token" : "başarısız"));
+        window.postMessage({ type: "__OSM_TOKEN_REFRESHED", ok: ok }, "*");
+    });
+
     // ======================
     // CÜZDAN GÖSTERGESİ GÜNCELLEME (API bypass'ta ekranı F5'siz tazele)
     // ======================

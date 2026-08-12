@@ -98,11 +98,22 @@ const Automation = {
         this.waitForButtonAndOpen();
     },
 
-    // Butonu kısa aralıklarla arar. Bulunca openRewardModal çağırır. Buton uzun
-    // süre yoksa (30 deneme ~45sn) SON ÇARE olarak sayfayı yeniler.
+    // Butonu kısa aralıklarla arar. Bulunca openRewardModal çağırır.
+    //
+    // DİKKAT: buton yokluğu "sayfa bozuk" DEMEK DEĞİLDİR. En sık sebebi cap:
+    // BusinessClub hakkı dolduğunda oyun butonu hiç göstermiyor. Eskiden burada
+    // 45sn sonra location.reload() vardı; cap'li sayfada bu SONSUZ YENİLEME
+    // döngüsü kuruyordu (yenile → buton yok → 45sn → yenile...). Kanıt: debug
+    // export 2026-08-12 13:33, 53 kaydın tamamı tek saniyelik sayfa açılışı.
+    //
+    // Artık: buton yoksa cap'e bakılır. Cap varsa süre kadar beklenir; API
+    // modundaysak motora geri dönülür. Yenileme yalnızca cap YOKKEN ve tek
+    // seferlik yapılır (gerçekten takılmış sayfa senaryosu).
     waitForButtonAndOpen() {
         let attempts = 0;
         const maxAttempts = 30;
+
+        if (this.buttonSearchInterval) clearInterval(this.buttonSearchInterval);
 
         const interval = setInterval(async () => {
             attempts++;
@@ -122,8 +133,7 @@ const Automation = {
 
             if (attempts > maxAttempts) {
                 clearInterval(interval);
-                Logger.warning("Buton bulunamadı (~45sn); SON ÇARE sayfa yenileniyor.");
-                setTimeout(() => location.reload(), 3000);
+                await this.handleMissingButton();
                 return;
             }
 
@@ -132,9 +142,73 @@ const Automation = {
 
             clearInterval(interval);
             Logger.success("Reklam butonu bulundu.");
+            // Buton bulundu: takılma sayacı sıfırlanır, yoksa sonraki gerçek
+            // takılmada tek seferlik yenileme hakkı harcanmış olurdu.
+            Storage.set({ buttonReloadCount: 0 });
             this.openRewardModal(button);
         }, 1500);
+
+        this.buttonSearchInterval = interval;
     },
+
+    // Buton ~45sn boyunca bulunamadı. Sebebi ayırt et: cap mi, takılmış sayfa mı?
+    async handleMissingButton() {
+        // 1) API modundaysak modal'a hiç düşmemeliydik. Motora geri dön.
+        if (this.bypassMode) {
+            Logger.info("Buton yok ve API modu aktif; çok hedefli motora dönülüyor.");
+            this.modalCloseMode = false;
+            // Fallback kalıcı yazmış olabilir; API moduna dönerken temizle ki
+            // sonraki başlatmada yanlış taktik seçilmesin.
+            await Storage.set({ modalCloseMode: false });
+            if (this.buttonSearchInterval) {
+                clearInterval(this.buttonSearchInterval);
+                this.buttonSearchInterval = null;
+            }
+            this.multiTargetLoop();
+            return;
+        }
+
+        // 2) BusinessClub cap'i biliniyorsa buton yokluğu NORMAL. Süre kadar
+        // bekle, sonra tekrar ara. Yenileme gereksiz ve zararlı.
+        const capUntil = typeof TargetTimers !== "undefined"
+            ? TargetTimers.capUntil?.businessClub
+            : null;
+
+        if (capUntil) {
+            const waitMs = Math.max(capUntil * 1000 - Date.now(), 15000);
+            const mins = Math.ceil(waitMs / 60000);
+            Logger.info(`Buton yok: reklam hakkı dolu, ${mins} dakika bekleniyor.`);
+            UI.setStatus("statusWaiting");
+            UI.setStarted();
+            if (await this.sleepUntil(Date.now() + waitMs)) {
+                UI.setStatus("statusRunning");
+                this.waitForButtonAndOpen();
+            }
+            return;
+        }
+
+        // 3) Cap bilinmiyor: gerçekten takılmış olabilir. Yenileme TEK SEFER
+        // denenir; sayaç storage'da tutulur ki reload sonrası sıfırlanmasın.
+        const s = await Storage.get(["buttonReloadCount"]);
+        const count = s.buttonReloadCount || 0;
+
+        if (count >= 1) {
+            Logger.warning("Buton yine bulunamadı; yenileme tekrarlanmıyor. 5 dakika sonra denenecek.");
+            UI.setStatus("statusWaiting");
+            await Storage.set({ buttonReloadCount: 0 });
+            if (await this.sleepUntil(Date.now() + 300000)) {
+                UI.setStatus("statusRunning");
+                this.waitForButtonAndOpen();
+            }
+            return;
+        }
+
+        Logger.warning("Buton bulunamadı (~45sn); sayfa bir kez yenileniyor.");
+        await Storage.set({ buttonReloadCount: count + 1 });
+        setTimeout(() => location.reload(), 3000);
+    },
+
+    buttonSearchInterval: null,
 
     async openRewardModal(button) {
         Logger.info("Reklam modalı açılıyor...");
@@ -277,7 +351,26 @@ const Automation = {
     // Scout) önce, sürekli olan BusinessClub sona. Bir hedef cap'e takılırsa
     // veya hakkı biterse sıradakine geçilir; hepsi tükenirse en kısa cap
     // süresi kadar beklenir.
+    // Aynı anda İKİ motor çalışmamalı. Döngü birkaç yerden başlatılabiliyor
+    // (start, modal'dan dönüş, fallback); koruma olmadan üst üste binip
+    // aynı hedefe paralel istek atarlar.
+    _loopRunning: false,
+
     async multiTargetLoop() {
+        if (this._loopRunning) {
+            Logger.info("Çok hedefli motor zaten çalışıyor.");
+            return;
+        }
+        this._loopRunning = true;
+
+        try {
+            await this.multiTargetLoopInner();
+        } finally {
+            this._loopRunning = false;
+        }
+    },
+
+    async multiTargetLoopInner() {
         Logger.info("Çok hedefli API döngüsü başladı.");
 
         const enabled = await this.getEnabledTargets();
@@ -336,6 +429,20 @@ const Automation = {
                 if (!TargetContext.ready(t)) return false;
                 return true;
             };
+
+            // Sayfa yüklenirken storage'dan gelen cap'ler DOĞRULANMAMIŞTIR.
+            // Her hedefi oturumda bir kez yine de dene: sunucu cap'liyse
+            // isCapReached döner ve kayıt tazelenir; cap yanlışsa hedef
+            // kurtulur. Eskiden bayat kayıt hedefi saatlerce kilitliyordu.
+            if (typeof TargetTimers !== "undefined") {
+                for (const t of enabled) {
+                    if (TargetTimers.isCapVerified(t.key)) continue;
+                    TargetTimers.markCapVerified(t.key);
+                    if (state[t.key].blockedUntil > now) continue;
+                    this._manualRetry.add(t.key);
+                    Logger.info(`${t.key}: kaydedilmiş bekleme doğrulanmamış, bir kez denenecek.`);
+                }
+            }
 
             // Seçim önceliği:
             //  1. Business Club — ana gelir kaynağı, hakkı varken bekletilmez
@@ -579,10 +686,25 @@ const Automation = {
     //    {actionId:"Multistep3", isCapReached:false, ...}]
     // Yapılabilir ilk adım = isCapReached false olan ilki. Hepsi doluysa null
     // döner ve çağıran hedefi cap'li sayar.
+    // Dönüş: adım numarası | null (tüm adımlar dolu) | "authFailure" (401).
+    //
+    // DİKKAT: 401'i null'a çevirmek KRİTİK BİR HATAYDI. callApi 401'de null
+    // döner; eski kod "dizi değilse null" diyerek bunu "tüm adımlar tamamlandı"
+    // sanıyor ve hedefi 1 saatlik cap'e atıyordu. Geçici bir token hatası
+    // savings'i saatlerce kilitliyordu — üstelik döngünün 401'e ayırdığı
+    // 10 saniyelik kısa ceza yoluna hiç ulaşılmıyordu.
     async fetchSequenceStep(target) {
         try {
             const resp = await this.callApi(Targets.url(target.capPath()), null, "GET");
-            if (!Array.isArray(resp)) return null;
+
+            if (!Array.isArray(resp)) {
+                if (this.lastAuthFailure) {
+                    Logger.warning(`${target.key}: adım sorgusu kimlik hatası verdi.`);
+                    return "authFailure";
+                }
+                Logger.warning(`${target.key}: adım sorgusu beklenmedik yanıt verdi.`);
+                return "unknown";
+            }
 
             let earliestCap = null;
 
@@ -610,7 +732,10 @@ const Automation = {
             Logger.info(`${target.key}: tüm adımlar tamamlanmış.`);
             return null;
         } catch (e) {
-            return null;
+            // İstisna "adımlar bitti" DEĞİLDİR; belirsiz say ki hedef
+            // yanlışlıkla saatlerce kilitlenmesin.
+            Logger.warning(`${target.key}: adım sorgusu hata verdi (${e.message}).`);
+            return "unknown";
         }
     },
 
@@ -648,6 +773,20 @@ const Automation = {
         let step = targetState.done + 1;
         if (typeof target.actionId === "function" && target.capPath) {
             const serverStep = await this.fetchSequenceStep(target);
+
+            // Kimlik hatası: cap DEĞİL. Çağırana 401 olarak bildir ki kısa
+            // ceza + token tazeleme yoluna gitsin.
+            if (serverStep === "authFailure") {
+                return { ok: false, authFailure: true };
+            }
+
+            // Belirsiz yanıt: cap saymak yanlış olur ama körlemesine devam
+            // etmek de doğru değil (yanlış adım denenirse ödül kaybolur).
+            // Kısa ceza ver, bir sonraki turda tekrar sorulur.
+            if (serverStep === "unknown") {
+                return { ok: false };
+            }
+
             if (serverStep === null) {
                 // Tüm adımlar dolu. Bellek sayacına düşmek yanlış olurdu:
                 // Multistep1 denenip cap'e takılır, kalan adımlar hiç
@@ -698,7 +837,8 @@ const Automation = {
             Targets.url("/api/v1.1/user/videos/watched"),
             `actionId=${encodeURIComponent(actionId)}&rewardVariation=0&capVariation=0`
         );
-        const rewardId = this.extractRewardId(watched);
+        const reward = this.extractReward(watched);
+        const rewardId = reward.id;
         if (!rewardId) {
             // watched null döndüyse sebep 401 olabilir; ayırt et.
             if (!watched && this.lastAuthFailure) {
@@ -723,10 +863,19 @@ const Automation = {
             teamId: TargetContext.teamId,
             sessionId: target.needsSession ? TargetContext.nextSession() : null,
             // Birikimler'de consume ucu ödül tipine göre değişiyor.
-            rewardType: this.extractRewardType(watched)
+            rewardType: reward.type
         };
         if (target.needsSession && !ctx.sessionId) {
             Logger.warning("Antrenman slotu bilinmiyor, hedef atlanıyor.");
+            return { ok: false };
+        }
+
+        // Consume ucu ödül tipine göre dallanan hedeflerde (Birikimler) tip
+        // BİLİNMEDEN istek atmak yanlış uca gitmek demektir: sunucu 200 döner,
+        // ödül hiçbir yere yazılmaz ve rewardId harcanmış olur. Tip yoksa turu
+        // iptal et — rewardId sunucuda ~7 gün beklediği için kayıp olmaz.
+        if (target.needsRewardType && ctx.rewardType === null) {
+            Logger.warning(`${target.key}: ödül tipi okunamadı, consume atlanıyor (rewardId korunuyor).`);
             return { ok: false };
         }
 
@@ -736,6 +885,25 @@ const Automation = {
         );
 
         if (!claim) return { ok: false, authFailure: this.lastAuthFailure };
+
+        // Sunucu 200 dönse bile ödülü REDDETMİŞ olabilir (yanlış uç, süresi
+        // geçmiş rewardId, zaten tüketilmiş...). Eski kod yalnızca falsy
+        // kontrolü yapıp her yanıtı başarı sayıyordu; panel "ödül alındı"
+        // yazarken hesaba hiçbir şey geçmiyordu. Açık başarısızlık işaretlerini
+        // ele: belirsizlik varsa başarı kabul edilir (yanlış negatif üretmemek
+        // için), ama açıkça false/hata diyen yanıt başarısızdır.
+        if (typeof claim === "object" && claim !== null) {
+            const failed =
+                claim.success === false ||
+                claim.isSuccess === false ||
+                claim.error != null ||
+                (typeof claim.status === "number" && claim.status >= 400);
+
+            if (failed) {
+                Logger.warning(`${target.key}: consume reddedildi — ${JSON.stringify(claim).slice(0, 200)}`);
+                return { ok: false };
+            }
+        }
 
         // BusinessClub: cüzdan göstergesi sayfanın kendi updateWallet'ı ile
         // F5'siz tazelenir (çözülmüş akış), sayfa yenilenmez.
@@ -783,15 +951,76 @@ const Automation = {
     async bypassFallbackOrGiveUp() {
         this.consecutiveApiFails++;
         Logger.warning(`Bypass API başarısız (${this.consecutiveApiFails}. kez).`);
-        if (this.consecutiveApiFails >= 3) {
-            Logger.warning("API 3 kez başarısız; Modal Odak Kaybı taktiğine geçiliyor.");
+
+        // Modal'a düşmeden ÖNCE token'ı tazelemeyi dene. 401'lerin baskın
+        // sebebi kimlik akışının bozulması değil, JWT'nin 20 dakikada
+        // bayatlaması. Tazeleme tutarsa modal'a hiç düşmeye gerek kalmaz.
+        if (this.consecutiveApiFails === 2) {
+            Logger.info("Kimlik hatası sürüyor: token tazeleniyor.");
+            if (await this.forceTokenRefresh()) {
+                Logger.success("Token tazelendi, API'ye devam ediliyor.");
+                this.consecutiveApiFails = 0;
+                return false;
+            }
+        }
+
+        if (this.consecutiveApiFails >= 4) {
+            // Modal taktiği YALNIZCA modal'ı olan sayfada anlamlı. Değilsek
+            // düşmek zararlı: buton hiç bulunamaz, reload döngüsü kurulur.
+            if (!this.isBusinessClubPage()) {
+                Logger.warning("API başarısız ama sayfa BusinessClub değil; modal'a düşülmüyor.");
+                this.consecutiveApiFails = 0;
+                await this.delay(30000);
+                return false;
+            }
+
+            Logger.warning("API üst üste başarısız; Modal Odak Kaybı taktiğine geçiliyor.");
             this.consecutiveApiFails = 0;
-            this.modalCloseMode = true; // bu oturum için modal tactic kullan
+
+            // Bellekteki bayrağı modalLoop storage'dan geri okuyup EZİYORDU;
+            // fallback'in seçtiği taktik hiç uygulanmıyordu. Kalıcı yaz.
+            this.modalCloseMode = true;
+            await Storage.set({ modalCloseMode: true });
+
             this.modalLoop();
             return true;
         }
         await this.delay(3000);
         return false;
+    },
+
+    // Modal taktiği yalnızca BusinessClub sayfasında uygulanabilir: reklam
+    // butonu ve modalı yalnızca orada var.
+    isBusinessClubPage() {
+        return location.pathname.toLowerCase().includes("businessclub");
+    },
+
+    // Sayfanın kendi token yenileme akışını tetikler ve yeni Bearer'ın
+    // yakalanmasını bekler. inject.js __OSM_FORCE_TOKEN_REFRESH mesajını
+    // dinler. true = yeni token geldi.
+    async forceTokenRefresh() {
+        window.postMessage({ type: "__OSM_FORCE_TOKEN_REFRESH" }, "*");
+
+        return new Promise(resolve => {
+            let done = false;
+            const handler = (e) => {
+                if (e.source !== window || !e.data) return;
+                if (e.data.type !== "__OSM_TOKEN_REFRESHED") return;
+                if (done) return;
+                done = true;
+                window.removeEventListener("message", handler);
+                resolve(e.data.ok === true);
+            };
+            window.addEventListener("message", handler);
+
+            // Yanıt gelmezse takılı kalma.
+            setTimeout(() => {
+                if (done) return;
+                done = true;
+                window.removeEventListener("message", handler);
+                resolve(false);
+            }, 10000);
+        });
     },
 
     // watched yanıtından rewardId'yi çıkarır. Yanıtın kesin şekli elimizde yok
@@ -801,36 +1030,56 @@ const Automation = {
     // watched yanıtındaki reward.type. Birikimler'de consume ucunu belirler
     // (type 1 = boss coin → bosscoinwallet, diğerleri → finances).
     // Yanıt dizi de olabiliyor: [{reward:{type:1,...}}]
-    extractRewardType(resp) {
-        const first = Array.isArray(resp) ? resp[0] : resp;
-        if (!first || typeof first !== "object") return null;
-        const type = first.reward && first.reward.type;
-        return typeof type === "number" ? type : null;
-    },
+    // rewardId ve rewardType AYNI ödül nesnesinden okunmalıdır.
+    //
+    // Eski kod ikisini bağımsız çıkarıyordu: type dizinin [0]'ından, id ise
+    // "yanıtın herhangi bir yerindeki ilk UUID"den. Dizi yanıtta bu ikisinin
+    // aynı ödüle ait olduğunun garantisi yoktu. Savings'te sonuç ağır:
+    // consume ucu type'a göre dallanıyor (type 1 = boss coin → bosscoinwallet,
+    // diğerleri → finances). Yanlış eşleşme = reklam izlenmiş sayılır ama ödül
+    // hiçbir yere yazılmaz. ("İzledi ama para/token gelmedi" şikayeti.)
+    //
+    // Bu yüzden önce ödül nesnesi bulunur, id ve type ondan okunur.
+    extractReward(resp) {
+        if (!resp || typeof resp !== "object") return { id: null, type: null };
 
-    extractRewardId(resp) {
-        if (!resp || typeof resp !== "object") return null;
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-        const candidates = [
-            resp.rewardId,
-            resp.reward && resp.reward.rewardId,
-            resp.reward && resp.reward.id,
-            resp.data && resp.data.rewardId,
-            resp.id
-        ];
-        for (const c of candidates) {
-            if (typeof c === "string" && c.length > 0) return c;
+        // Ödül taşıyan olası nesneleri sırayla dene (dizi ise her elemanı).
+        const items = Array.isArray(resp) ? resp : [resp];
+
+        for (const item of items) {
+            if (!item || typeof item !== "object") continue;
+
+            // Ödül gövdesi doğrudan item'da ya da item.reward / item.data içinde.
+            for (const holder of [item.reward, item.data, item]) {
+                if (!holder || typeof holder !== "object") continue;
+
+                const id = [holder.rewardId, holder.id]
+                    .find(v => typeof v === "string" && UUID_RE.test(v));
+                if (!id) continue;
+
+                const type = typeof holder.type === "number"
+                    ? holder.type
+                    : (item.reward && typeof item.reward.type === "number"
+                        ? item.reward.type
+                        : null);
+
+                return { id, type };
+            }
         }
 
-        // Son çare: yanıtın tamamında UUID ara.
+        // Son çare: yanıtın tamamında UUID ara. Bu yolda type GÜVENİLİR DEĞİL,
+        // çünkü hangi ödüle ait olduğunu bilmiyoruz — null bırakılır ve
+        // çağıran tip gerektiren hedefte turu iptal eder.
         try {
             const uuid = JSON.stringify(resp).match(
                 /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
             );
-            if (uuid) return uuid[0];
+            if (uuid) return { id: uuid[0], type: null };
         } catch (e) {}
 
-        return null;
+        return { id: null, type: null };
     },
 
     // videos/start yanıtı sayfa tarafında (inject.js fetch/XHR hook) yakalanır ve

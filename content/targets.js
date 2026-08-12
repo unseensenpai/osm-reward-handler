@@ -48,6 +48,9 @@ const Targets = {
                 ? "/api/v1/user/bosscoinwallet/consumereward"
                 : `/api/v1/leagues/${ctx.leagueId}/teams/${ctx.teamId}/finances/consumereward`,
         needsTeam: true,
+        // Consume ucu ödül tipine göre dallandığı için tip ZORUNLU: bilinmeden
+        // istek atılırsa yanlış uca gider ve ödül sessizce kaybolur.
+        needsRewardType: true,
         dailyLimit: 3,
         supportsModal: false,
         page: "/Missions",
@@ -282,6 +285,15 @@ const TargetTimers = {
     // timers.type -> hedef eşlemesi. Antrenör tipleri (18,1,2,3,4) tek
     // "training" hedefine bağlanır; panelde tek satır gösterilip reklamlar
     // round-robin ile aralarında dağıtılır.
+    // DİKKAT: buraya YALNIZCA reklamla kısaltılabilen sayaçlar girer. Oyun
+    // aynı ekran için başka sayaçlar da döndürüyor (kanıt: debug export
+    // 2026-08-12 13:33):
+    //   type 7  "Antrenman sahası"  -20.4 saat (tesis, reklamla ilgisi yok)
+    //   type 14 "Sıradaki maç"       +2.7 saat
+    //   type 17 "Evrensel antrenör kullanılabilirliği" +0.2 saat
+    // Bunlar BİLEREK dışarıda: haritaya eklenirlerse panel yanlış hedefe
+    // yanlış süre yazar. type 17 özellikle tuzak — 18 ile karıştırılabilir
+    // ama o antrenörün "ne zaman tekrar kullanılabilir"i, reklam hakkı değil.
     TYPE_MAP: {
         9: "scout",       // Yetenek Avcısı
         18: "training",   // Evrensel antrenör
@@ -305,7 +317,11 @@ const TargetTimers = {
     // için "hazır" işareti. Yeni cap gelince silinir.
     readySince: {},
 
+    // Yalnızca CANLI sunucu yanıtından çağrılır (videos/start, caps/sequences).
+    // Dolayısıyla buraya giren her cap doğrulanmıştır.
     setCap(key, timestampSeconds) {
+        delete this.unverifiedCaps[key];
+
         if (!timestampSeconds) {
             delete this.capUntil[key];
         } else {
@@ -319,14 +335,34 @@ const TargetTimers = {
         document.dispatchEvent(new CustomEvent("osm:timers", { detail: this.remaining }));
     },
 
+    // Geri yüklenen cap'ler DOĞRULANMAMIŞ sayılır. Cap yalnızca hedef
+    // denendiğinde öğrenilebiliyor; yanlış/bayat bir kayıt geri yüklenirse
+    // hedef o saate kadar hiç denenmez, denenmediği için de kayıt düzelmez —
+    // kendi kendini besleyen kilit. Bu yüzden motor doğrulanmamış cap'i bir
+    // kez yok sayıp hedefi yine dener; sunucu gerçekten cap'liyse zaten
+    // isCapReached döner ve kayıt tazelenir (maliyet: tek istek).
+    unverifiedCaps: {},
+
     async restoreCaps() {
         const s = await Storage.get(["targetCaps"]);
         if (!s.targetCaps || typeof s.targetCaps !== "object") return;
 
         const now = Math.floor(Date.now() / 1000);
         for (const [key, ts] of Object.entries(s.targetCaps)) {
-            if (typeof ts === "number" && ts > now) this.capUntil[key] = ts;
+            if (typeof ts === "number" && ts > now) {
+                this.capUntil[key] = ts;
+                this.unverifiedCaps[key] = true;
+            }
         }
+    },
+
+    // Hedef bu oturumda gerçekten sunucudan doğrulandı mı?
+    isCapVerified(key) {
+        return !this.unverifiedCaps[key];
+    },
+
+    markCapVerified(key) {
+        delete this.unverifiedCaps[key];
     },
     pollHandle: null,
     POLL_MS: 60000,
@@ -385,12 +421,39 @@ const TargetTimers = {
             if (!key) continue;
             if (t.isClaimed) continue;
 
+            // Süresi ZATEN DOLMUŞ sayaç (finished < now) "hazır" demektir.
+            // Kanıt (debug export 2026-08-12 13:33): üç antrenör -226/-220/-212
+            // saniyedeydi, yani ödülleri bekliyordu. Eski kod en KÜÇÜK
+            // finishedTimestamp'i seçtiği için hep en negatif olanı alıyor,
+            // hazır olan slotlar birbirini gölgeliyordu. Hazır bir sayaç
+            // varsa hedef hazırdır ve aramayı orada bitiririz.
+            const serverNow = t.currentTimestamp || Math.floor(Date.now() / 1000);
+            const isReady = t.finishedTimestamp <= serverNow;
+
             const cur = next[key];
+
+            if (isReady) {
+                // Hazır olan her zaman kazanır; birden çoksa ilki yeter.
+                if (!cur || !cur.ready) {
+                    next[key] = {
+                        finishedTimestamp: t.finishedTimestamp,
+                        title: t.title,
+                        serverNow: t.currentTimestamp,
+                        ready: true
+                    };
+                }
+                continue;
+            }
+
+            // Hazır sayaç bulunduysa ileri tarihli olanlar onu geçemez.
+            if (cur && cur.ready) continue;
+
             if (!cur || t.finishedTimestamp < cur.finishedTimestamp) {
                 next[key] = {
                     finishedTimestamp: t.finishedTimestamp,
                     title: t.title,
-                    serverNow: t.currentTimestamp
+                    serverNow: t.currentTimestamp,
+                    ready: false
                 };
             }
         }
