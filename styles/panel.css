@@ -634,3 +634,133 @@
     background:#e67e22;
 
 }
+/* ======================
+   GÜNCELLEME BİLDİRİMİ
+   ====================== */
+
+#osm-update-banner{
+
+    background:#1e3a2f;
+
+    border:1px solid #27ae60;
+
+    border-radius:6px;
+
+    padding:8px;
+
+    margin-bottom:8px;
+
+}
+
+#osm-update-text{
+
+    font-size:12px;
+
+    font-weight:bold;
+
+    color:#2ecc71;
+
+    margin-bottom:6px;
+
+}
+
+#osm-update-actions{
+
+    display:flex;
+
+    gap:4px;
+
+    flex-wrap:wrap;
+
+}
+
+#osm-update-actions button{
+
+    border:none;
+
+    border-radius:4px;
+
+    padding:5px 8px;
+
+    cursor:pointer;
+
+    font-size:11px;
+
+    font-weight:bold;
+
+    color:white;
+
+    background:#27ae60;
+
+}
+
+#osm-update-actions button:hover{
+
+    filter:brightness(1.15);
+
+}
+
+#osm-update-notes{
+
+    background:#34495e !important;
+
+}
+
+#osm-update-dismiss{
+
+    background:transparent !important;
+
+    color:#7f8c8d !important;
+
+    flex:0 0 auto;
+
+    padding:5px 6px !important;
+
+}
+
+#osm-update-auto{
+
+    flex:1 1 100%;
+
+    background:#2ecc71 !important;
+
+    color:#123 !important;
+
+}
+
+#osm-update-download{
+
+    flex:1;
+
+}
+
+#osm-update-hint{
+
+    font-size:10px;
+
+    color:#95a5a6;
+
+    margin-top:5px;
+
+    line-height:1.3;
+
+}
+
+/* Panel küçültülmüşken de belli olsun: dock noktası yeşil yanıp söner. */
+#osm-dock.osm-has-update #osm-dock-dot{
+
+    background:#2ecc71;
+
+    box-shadow:0 0 6px #2ecc71;
+
+    animation:osm-update-pulse 1.6s ease-in-out infinite;
+
+}
+
+@keyframes osm-update-pulse{
+
+    0%,100%{ opacity:1; }
+
+    50%{ opacity:.35; }
+
+}

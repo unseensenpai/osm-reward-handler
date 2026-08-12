@@ -118,5 +118,32 @@
   },
   "expandTooltip": {
     "message": "Paneli aç"
+  },
+  "updateAvailable": {
+    "message": "⬆ Yeni sürüm: v${latest} (sizde v${current})"
+  },
+  "updateHint": {
+    "message": "Otomatik kur: komutu kopyalar, uzantı klasöründe PowerShell'e yapıştır. Ya da İndir → chrome://extensions → Yenile"
+  },
+  "btnUpdateAuto": {
+    "message": "Otomatik kur"
+  },
+  "btnUpdateAutoTooltip": {
+    "message": "update.ps1 komutunu panoya kopyalar (indirir ve kurar)"
+  },
+  "btnUpdateAutoCopied": {
+    "message": "✓ Kopyalandı"
+  },
+  "btnUpdateAutoFailed": {
+    "message": "Konsola bakın"
+  },
+  "btnUpdateDownload": {
+    "message": "İndir"
+  },
+  "btnUpdateNotes": {
+    "message": "Notlar"
+  },
+  "btnUpdateDismissTooltip": {
+    "message": "Bu sürüm için bir daha hatırlatma"
   }
 }

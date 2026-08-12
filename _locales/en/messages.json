@@ -118,5 +118,32 @@
   },
   "expandTooltip": {
     "message": "Expand panel"
+  },
+  "updateAvailable": {
+    "message": "⬆ New version: v${latest} (you have v${current})"
+  },
+  "updateHint": {
+    "message": "Auto install: copies a command — paste it into PowerShell in the extension folder. Or Download → chrome://extensions → Reload"
+  },
+  "btnUpdateAuto": {
+    "message": "Auto install"
+  },
+  "btnUpdateAutoTooltip": {
+    "message": "Copies the update.ps1 command (downloads and installs)"
+  },
+  "btnUpdateAutoCopied": {
+    "message": "✓ Copied"
+  },
+  "btnUpdateAutoFailed": {
+    "message": "See console"
+  },
+  "btnUpdateDownload": {
+    "message": "Download"
+  },
+  "btnUpdateNotes": {
+    "message": "Notes"
+  },
+  "btnUpdateDismissTooltip": {
+    "message": "Don't remind me about this version"
   }
 }

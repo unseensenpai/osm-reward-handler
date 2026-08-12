@@ -78,6 +78,17 @@ const UI = {
 
             </div>
 
+            <div id="osm-update-banner" style="display:none;">
+                <div id="osm-update-text"></div>
+                <div id="osm-update-actions">
+                    <button id="osm-update-auto" title="${ContentI18N.t('btnUpdateAutoTooltip')}">${ContentI18N.t('btnUpdateAuto')}</button>
+                    <button id="osm-update-download">${ContentI18N.t('btnUpdateDownload')}</button>
+                    <button id="osm-update-notes">${ContentI18N.t('btnUpdateNotes')}</button>
+                    <button id="osm-update-dismiss" title="${ContentI18N.t('btnUpdateDismissTooltip')}">✕</button>
+                </div>
+                <div id="osm-update-hint">${ContentI18N.t('updateHint')}</div>
+            </div>
+
             <div class="osm-section">
 
                 <div class="osm-label" id="osm-label-status">
@@ -152,6 +163,11 @@ const UI = {
         this.collapseButton = panel.querySelector("#osm-collapse-btn");
         this.dock = panel.querySelector("#osm-dock");
 
+        this.updateBanner = panel.querySelector("#osm-update-banner");
+        this.updateText = panel.querySelector("#osm-update-text");
+        this.updateHint = panel.querySelector("#osm-update-hint");
+
+        this.registerUpdateEvents();
         this.registerEvents();
         this.registerCollapse();
         this.registerDrag();
@@ -159,6 +175,76 @@ const UI = {
         this.buildTargetList();
         this.startTargetCountdowns();
 
+    },
+
+    // ======================
+    // GÜNCELLEME BİLDİRİMİ
+    // ======================
+
+    registerUpdateEvents() {
+        if (!this.panel) return;
+
+        const auto = this.panel.querySelector("#osm-update-auto");
+        const dl = this.panel.querySelector("#osm-update-download");
+        const notes = this.panel.querySelector("#osm-update-notes");
+        const dismiss = this.panel.querySelector("#osm-update-dismiss");
+
+        // "Otomatik kur": uzantı kendi dosyalarına yazamadığı için kurulumu
+        // update.ps1 yapar. Buton komutu panoya kopyalar; kullanıcı PowerShell'e
+        // yapıştırıp çalıştırır, script indirir + kurar.
+        if (auto) auto.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const ok = await Updater.copyInstallCommand();
+            auto.textContent = ok
+                ? ContentI18N.t('btnUpdateAutoCopied')
+                : ContentI18N.t('btnUpdateAutoFailed');
+            setTimeout(() => {
+                auto.textContent = ContentI18N.t('btnUpdateAuto');
+            }, 2500);
+        });
+
+        // stopPropagation: panel başlığı sürüklenebilir, buton tıklaması
+        // sürükleme başlatmasın.
+        if (dl) dl.addEventListener("click", (e) => {
+            e.stopPropagation();
+            Updater.download();
+        });
+
+        if (notes) notes.addEventListener("click", (e) => {
+            e.stopPropagation();
+            Updater.openReleasePage();
+        });
+
+        if (dismiss) dismiss.addEventListener("click", (e) => {
+            e.stopPropagation();
+            Updater.dismiss();
+        });
+    },
+
+    showUpdateBanner(latest, currentVersion) {
+        if (!this.updateBanner) return;
+
+        if (this.updateText) {
+            this.updateText.textContent = ContentI18N.tVar('updateAvailable', {
+                latest: latest.version,
+                current: currentVersion
+            });
+        }
+
+        if (this.updateHint) {
+            this.updateHint.textContent = ContentI18N.t('updateHint');
+        }
+
+        this.updateBanner.style.display = "block";
+
+        // Panel küçültülmüşse kullanıcı bandı göremez; dock'taki noktayı
+        // vurgula ki bir şey olduğu belli olsun.
+        if (this.dock) this.dock.classList.add("osm-has-update");
+    },
+
+    hideUpdateBanner() {
+        if (this.updateBanner) this.updateBanner.style.display = "none";
+        if (this.dock) this.dock.classList.remove("osm-has-update");
     },
 
     refreshLang() {

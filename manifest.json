@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_appName__",
   "description": "__MSG_appDescription__",
-  "version": "3.4.3",
+  "version": "3.4.4",
   "default_locale": "en",
 
   "icons": {
@@ -18,7 +18,8 @@
   ],
 
   "host_permissions": [
-    "*://*.onlinesoccermanager.com/*"
+    "*://*.onlinesoccermanager.com/*",
+    "https://api.github.com/*"
   ],
 
   "background": {
@@ -49,6 +50,7 @@
         "content/i18n.js",
         "content/timer.js",
         "content/targets.js",
+        "content/updater.js",
         "content/ui.js",
         "content/debug.js",
         "content/automation.js",

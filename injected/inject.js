@@ -48,6 +48,132 @@
     }
 
     // ======================
+    // REFRESH TOKEN YAKALAMA
+    // ======================
+    // HAR kanıtı (2026-08-12): sayfa açılışta şunu atıyor —
+    //   POST /api/tokenRefresh
+    //   grant_type=refresh_token&client_id=..&client_secret=..&refresh_token=..
+    //   (authorization header YOK; kimlik gövdedeki refresh_token'da)
+    // Yanıt 200 ve hemen ardından tüm istekler taze Bearer ile 200 dönüyor.
+    //
+    // Access token 20 dk, refresh token 7 GÜN ömürlü. Refresh token'ı bir kez
+    // yakalarsak sekme saatlerce boşta kalsa bile access token'ı kendimiz
+    // tazeleyebiliriz. v3.2.0 bunu yapmıyordu; her cap sonrası location.reload()
+    // ettiği için sayfa açılışta token'ı kendisi tazeliyordu. v3.4.2'de reload
+    // kaldırılınca (döngü ölümünü çözmek için) token'ın TEK tazelenme yolu da
+    // kesildi ve her istek 401 almaya başladı.
+    const REFRESH_URL = "https://web-api.onlinesoccermanager.com/api/tokenRefresh";
+
+    // Ham fetch referansı EN BAŞTA alınır. Aşağıdaki hook window.fetch'i
+    // değiştiriyor; refreshAccessToken hook'lu sürümü kullanırsa kendi
+    // isteğimiz OSM_API_RESPONSE olarak yayınlanır ve sahte kayıt üretir.
+    const rawFetch = window.fetch.bind(window);
+
+    // Sayfanın kendi tokenRefresh isteğinden yakalanır. client_id/secret'ı
+    // koda GÖMMÜYORUZ: OSM sürüm değiştirince sabit değer bozulur, yakalanan
+    // değer bozulmaz.
+    let refreshCreds = null;
+
+    try {
+        const saved = localStorage.getItem("__osm_refresh_creds");
+        if (saved) refreshCreds = JSON.parse(saved);
+    } catch (e) {}
+
+    // tokenRefresh isteğinin gövdesini yakala (fetch + XHR hook'larından çağrılır).
+    function captureRefreshCreds(url, body) {
+        if (typeof url !== "string" || !/\/api\/tokenRefresh/.test(url)) return;
+        if (typeof body !== "string" || !body) return;
+
+        try {
+            const p = new URLSearchParams(body);
+            const rt = p.get("refresh_token");
+            if (!rt) return;
+
+            refreshCreds = {
+                grant_type: p.get("grant_type") || "refresh_token",
+                client_id: p.get("client_id") || "",
+                client_secret: p.get("client_secret") || "",
+                refresh_token: rt
+            };
+
+            // Sayfa yenilense de kalsın: refresh token 7 gün geçerli.
+            try {
+                localStorage.setItem("__osm_refresh_creds", JSON.stringify(refreshCreds));
+            } catch (e) {}
+
+            console.log("[OSM] Refresh kimliği yakalandı (7 gün ömürlü).");
+        } catch (e) {}
+    }
+
+    // Access token'ı DOĞRUDAN tazele. Sayfanın 401 akışını beklemeye gerek yok.
+    // Dönen değer: yeni JWT ya da null.
+    async function refreshAccessToken() {
+        if (!refreshCreds || !refreshCreds.refresh_token) return null;
+
+        try {
+            const body = new URLSearchParams({
+                grant_type: refreshCreds.grant_type || "refresh_token",
+                client_id: refreshCreds.client_id || "",
+                client_secret: refreshCreds.client_secret || "",
+                refresh_token: refreshCreds.refresh_token
+            }).toString();
+
+            // rawFetch: kendi hook'umuzu tetikleyip sahte mesaj üretmesin.
+            const res = await rawFetch(REFRESH_URL, {
+                method: "POST",
+                headers: {
+                    "accept": "application/json; charset=utf-8",
+                    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "appversion": "3.254.0",
+                    "platformid": "11"
+                },
+                body: body,
+                mode: "cors",
+                credentials: "include"
+            });
+
+            if (!res.ok) {
+                console.warn("[OSM] tokenRefresh başarısız: " + res.status);
+                // 400/401 = refresh token da ölmüş. Sakladığımızı at ki bir
+                // sonraki sayfa yüklemesinde tazesi yakalansın.
+                if (res.status === 400 || res.status === 401) {
+                    refreshCreds = null;
+                    try { localStorage.removeItem("__osm_refresh_creds"); } catch (e) {}
+                }
+                return null;
+            }
+
+            const data = await res.json();
+
+            // Alan adı sürüme göre değişebilir; bilinen adayları sırayla dene.
+            const fresh = data && (data.access_token || data.accessToken ||
+                                   data.token || data.jwt);
+            if (!fresh) {
+                console.warn("[OSM] tokenRefresh yanıtında access token bulunamadı.");
+                return null;
+            }
+
+            // Refresh token ROTASYONU olabilir: yanıtta yenisi geldiyse sakla.
+            // (HAR'da yanıt gövdesi kaydedilmemişti, o yüzden savunmalıyız.)
+            const newRt = data.refresh_token || data.refreshToken;
+            if (newRt && newRt !== refreshCreds.refresh_token) {
+                refreshCreds.refresh_token = newRt;
+                try {
+                    localStorage.setItem("__osm_refresh_creds", JSON.stringify(refreshCreds));
+                } catch (e) {}
+                console.log("[OSM] Refresh token döndürüldü, yenisi saklandı.");
+            }
+
+            window.__OSM_TOKEN = fresh;
+            console.log("[OSM] Access token tazelendi (tokenRefresh).");
+            return fresh;
+        } catch (e) {
+            console.warn("[OSM] tokenRefresh hatası: " + e.message);
+            return null;
+        }
+    }
+
+    // ======================
     // TOKEN TAZELİĞİ
     // ======================
     // Yakalanan JWT kısa ömürlü (nbf→exp = 1200sn / 20dk). Yakalama PASİF:
@@ -95,10 +221,13 @@
     // mekanizma hiç tetiklenmiyordu (appViewModel.refreshToken aranıyordu,
     // orada olmadığı için 8sn boşuna beklenip pes ediliyordu).
     //
-    // Çözüm: sayfanın kendi XHR katmanından zararsız bir istek attır. Bayat
-    // token'la 401 alacak, OSM'in handleFailedHttpResponse'u devreye girip
-    // tokenRefresh'i çalıştıracak ve yeni token bizim send hook'umuzdaki
-    // captureBearer ile yakalanacak.
+    // ESKİ ÇÖZÜM (YETMİYORDU): auth'suz istek attırıp 401 aldırmak ve OSM'in
+    // handleFailedHttpResponse'unu tetiklemek. Debug kanıtı (2026-08-12, 2.5
+    // saat): /api/v1/user/accounts'a 488 istek, 488'inin yanıtı BOŞ, tek bir
+    // tokenRefresh tetiklenmemiş. Çıplak XHR OSM'in interceptor'ından geçmiyor.
+    //
+    // YENİ ÇÖZÜM: tokenRefresh DOĞRUDAN çağrılıyor (refreshAccessToken).
+    // Aşağıdaki yollar yalnızca yedek olarak kaldı.
     function nudgeTokenRefresh() {
         // Önce viewModel'de dursa da kullan (sürüm değişirse diye).
         try {
@@ -126,6 +255,15 @@
         } catch (e) {}
 
         return false;
+    }
+
+    // Token tazelemek için TEK giriş noktası. Önce gerçek tokenRefresh (kesin
+    // çözüm), tutmazsa eski dolaylı yollar. true = elimizde taze token var.
+    async function ensureFreshToken(maxWaitMs) {
+        if (await refreshAccessToken()) return true;
+
+        nudgeTokenRefresh();
+        return waitForFreshToken(maxWaitMs);
     }
 
     // Taze token bekle: sayfanın yeni bir istek atıp captureBearer'ı
@@ -180,10 +318,18 @@
             const req = args[0];
             if (req && typeof req === "object" && req.headers) captureBearer(readAuth(req.headers));
 
+            const reqUrl = String(args[0]?.url ?? args[0] ?? "");
+            const reqBody = init?.body;
+
+            // Sayfa kendi tokenRefresh'ini atarken kimliği yakala: bu gövde
+            // 7 gün ömürlü refresh_token'ı taşıyor ve access token'ı bundan
+            // sonra kendimiz tazeleyebiliriz.
+            if (typeof reqBody === "string") captureRefreshCreds(reqUrl, reqBody);
+
             postApiRequest(
-                String(args[0]?.url ?? args[0] ?? ""),
+                reqUrl,
                 init?.method || args[0]?.method || "GET",
-                init?.body
+                reqBody
             );
         } catch (e) {}
         const response = await originalFetch(...args);
@@ -222,6 +368,10 @@
 
     XMLHttpRequest.prototype.send = function(body) {
         try {
+            // fetch hook'undaki ile aynı: tokenRefresh gövdesinden refresh
+            // kimliğini yakala. Sayfa hangi katmanı kullanırsa kullansın kaçmasın.
+            if (typeof body === "string") captureRefreshCreds(this.__osmUrl, body);
+
             postApiRequest(this.__osmUrl, this.__osmMethod, body);
         } catch (e) {}
         this.addEventListener("load", function() {
@@ -287,9 +437,14 @@
         // Bayat token'la istek atmak kesin 401; beklemek daha ucuz.
         if (isTokenStale(token)) {
             console.warn("[OSM] Token bayat, tazeleniyor...");
-            nudgeTokenRefresh();
-            await waitForFreshToken(5000);
+            await ensureFreshToken(5000);
             token = window.__OSM_TOKEN;
+        }
+
+        // Hiç token yakalanmadıysa (sekme uzun süre boşta kaldı, sayfa hiç
+        // istek atmadı) refresh kimliğiyle sıfırdan üretmeyi dene.
+        if (!token) {
+            token = await refreshAccessToken();
         }
 
         if (!token) {
@@ -329,9 +484,23 @@
                 });
                 const text = await response.text();
                 console.log("[OSM] API yanıtı (" + response.status + "):", endpoint, text);
+
+                // Debug kaydına BİZİM isteğimiz de girsin. originalFetch hook'u
+                // atladığı için kendi ödül trafiğimiz kayıtta hiç görünmüyordu:
+                // 2026-08-12 teşhisinde "hiç istek atılmamış" gibi okunup yanlış
+                // yöne sapılmasına sebep oldu. Status'u da yaz ki 401'ler görünsün.
+                try {
+                    postApiRequest(endpoint, isGet ? "GET" : method, isGet ? null : body);
+                    postApiResponse(endpoint, "[" + response.status + "] " + text);
+                } catch (e2) {}
+
                 return { ok: response.ok, status: response.status, text: text };
             } catch (e) {
                 console.error("[OSM] API çağrısı başarısız:", e.message);
+                try {
+                    postApiRequest(endpoint, isGet ? "GET" : method, isGet ? null : body);
+                    postApiResponse(endpoint, "[HATA] " + e.message);
+                } catch (e2) {}
                 return { ok: false, status: 0, text: null, error: e.message };
             }
         };
@@ -347,6 +516,16 @@
         if (looksAuthFailure && !result.__retried) {
             const dead = window.__OSM_TOKEN;
             console.warn("[OSM] " + result.status + " alındı; token geçersiz sayılıp yenileniyor.");
+
+            // ÖNCE gerçek tokenRefresh: refresh kimliği elimizdeyse tek istekle
+            // taze token gelir, sayfanın 401 akışını beklemeye gerek kalmaz.
+            const refreshed = await refreshAccessToken();
+            if (refreshed && refreshed !== dead) {
+                console.log("[OSM] Yeni token alındı (tokenRefresh), istek tekrarlanıyor.");
+                result = await attempt(refreshed);
+                result.__retried = true;
+                return result;
+            }
 
             // Bayat token'ı düşür ki captureBearer yenisini "yeni" görsün.
             window.__OSM_TOKEN = null;

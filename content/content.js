@@ -59,6 +59,13 @@ if (typeof IframeHandler !== "undefined") {
         await DebugMode.init();
     }
 
+    // Sürüm kontrolü. DebugMode gibi ERKEN kurulur: aşağıdaki ban/duraklatma
+    // dalları return ediyor ve güncelleme bildirimi her durumda görünmeli.
+    // Ağa çıkma işi kendi içinde geciktiriliyor, bootstrap'ı yavaşlatmaz.
+    if (typeof Updater !== "undefined") {
+        Updater.init();
+    }
+
     // Hedef satırlarındaki "şimdi dene" butonları otomasyon durmuşken de
     // çalışmalı; dinleyici start()'tan bağımsız kurulur. Geri sayımlar da
     // panel açıkken sürekli beslenir.
