@@ -373,6 +373,20 @@ const TargetTimers = {
         if (this.pollHandle) clearInterval(this.pollHandle);
         this.pollHandle = setInterval(() => this.poll(), this.POLL_MS);
 
+        // Sekmeye geri dönüldüğü an sayaçları ve motoru tazele. Arka planda
+        // setInterval de kısılıyor (dakikada bir ya da hiç); kullanıcı sekmeye
+        // baktığında donmuş motorun bir sonraki poll'u beklemesi anlamsız.
+        if (!this._visibilityHooked) {
+            this._visibilityHooked = true;
+            document.addEventListener("visibilitychange", () => {
+                if (document.hidden) return;
+                if (typeof Automation !== "undefined" && Automation.reviveLoopIfStalled) {
+                    Automation.reviveLoopIfStalled();
+                }
+                this.poll();
+            });
+        }
+
         // İlk çekim bağlam hazır olunca yapılmalı: sayfa açılırken leagueId /
         // teamId henüz bilinmiyor (sayfanın kendi isteklerinden öğreniliyor)
         // ve inject.js yüklenmemiş olabilir. Erken denenirse poll sessizce
@@ -398,6 +412,14 @@ const TargetTimers = {
     },
 
     async poll() {
+        // Motor watchdog'u: bu setInterval, döngünün kendi async zincirinden
+        // BAĞIMSIZ çalışır. Arka plandaki sekmede zincir koptuğunda (bkz.
+        // Automation.sleepUntil) motoru canlandıracak tek yer burasıdır.
+        // Sekme "Hazır" gösterip hiçbir şey yapmıyorsa sebebi buydu.
+        if (typeof Automation !== "undefined" && Automation.reviveLoopIfStalled) {
+            Automation.reviveLoopIfStalled();
+        }
+
         if (!TargetContext.leagueId || !TargetContext.teamId) return;
         if (!Automation.injectReady) return;
 

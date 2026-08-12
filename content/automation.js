@@ -356,22 +356,80 @@ const Automation = {
     // aynı hedefe paralel istek atarlar.
     _loopRunning: false,
 
+    // Döngünün son yaşam işareti (ms). Her turda ve her uyku adımında tazelenir.
+    // Watchdog bunun bayatlamasına bakarak donmuş motoru ayırt eder.
+    _loopHeartbeat: 0,
+
+    // Motorun uyanması gereken an. Watchdog "vakti geldi mi" sorusunu buradan
+    // cevaplar; _loopHeartbeat tek başına yeterli değil çünkü uzun bekleme
+    // sırasında bayatlama NORMALDİR.
+    _loopWakeAt: 0,
+
+    beat(wakeAt) {
+        this._loopHeartbeat = Date.now();
+        if (wakeAt !== undefined) this._loopWakeAt = wakeAt;
+    },
+
     async multiTargetLoop() {
         if (this._loopRunning) {
             Logger.info("Çok hedefli motor zaten çalışıyor.");
             return;
         }
         this._loopRunning = true;
+        this.beat(0);
 
         try {
             await this.multiTargetLoopInner();
         } finally {
             this._loopRunning = false;
+            this._loopWakeAt = 0;
         }
+    },
+
+    // Motor donmuş mu? İki koşul birlikte aranır:
+    //  1. Uyanma vakti geçmiş (_loopWakeAt <= now)
+    //  2. Yaşam işareti bayat (son adımdan bu yana uzun süre geçmiş)
+    //
+    // Sadece (1)'e bakmak yanlış olurdu: uyanma anıyla ilk isteğin arası
+    // normalde de birkaç saniye. Sadece (2)'ye bakmak da yanlış: uzun bir
+    // beklemenin ortasında heartbeat zaten seyrektir. İkisi birlikte
+    // "uyanması gerekiyordu ama uyanmadı" demektir.
+    isLoopStalled() {
+        if (!this._loopRunning) return false;
+        if (!this._loopWakeAt) return false;
+
+        const now = Date.now();
+        if (now < this._loopWakeAt) return false;          // daha vakti var
+
+        // Uyanma vakti geçtiği halde 90 saniyedir kıpırdamıyorsa donmuştur.
+        return (now - this._loopHeartbeat) > 90000;
+    },
+
+    // Donmuş motoru canlandırır. Zincir koptuğu için eski async akışı geri
+    // getirilemez; bayrağı temizleyip motoru yeniden başlatmak tek yol.
+    // Eski akış bir noktada uyanırsa _loopGeneration sayesinde sessizce ölür.
+    _loopGeneration: 0,
+
+    reviveLoopIfStalled() {
+        if (!this.isLoopStalled()) return;
+
+        const lateSec = Math.round((Date.now() - this._loopWakeAt) / 1000);
+        Logger.warning(`Motor donmuş görünüyor (${lateSec}sn gecikme); yeniden başlatılıyor.`);
+
+        this._loopGeneration++;
+        this._loopRunning = false;
+        this._loopWakeAt = 0;
+        this.multiTargetLoop();
     },
 
     async multiTargetLoopInner() {
         Logger.info("Çok hedefli API döngüsü başladı.");
+
+        // Bu akışın kuşak numarası. Watchdog donmuş sayıp motoru yeniden
+        // başlattıysa numara artar; geç uyanan ESKİ akış bunu görüp sessizce
+        // çekilir, yoksa iki motor aynı hedefe paralel istek atardı.
+        const generation = this._loopGeneration;
+        const stale = () => this._loopGeneration !== generation;
 
         const enabled = await this.getEnabledTargets();
         if (enabled.length === 0) {
@@ -387,6 +445,15 @@ const Automation = {
         enabled.forEach(t => state[t.key] = { done: 0, blockedUntil: 0 });
 
         while (true) {
+            // Watchdog bu akışı ölü ilan edip yenisini başlattıysa çekil.
+            if (stale()) {
+                Logger.info("Eski motor akışı sonlandı (yenisi çalışıyor).");
+                return;
+            }
+
+            // Tur başladı: motor canlı. Bekleme yokken uyanma vakti de yok.
+            this.beat(0);
+
             const s = await Storage.get(["botPaused"]);
             if (s.botPaused) { UI.setStatus("statusPaused"); return; }
 
@@ -481,6 +548,7 @@ const Automation = {
                         Logger.info("Bağlam hazır değil, 15 saniye sonra tekrar denenecek.");
                         UI.setStatus("statusWaiting");
                         UI.setStarted();
+                        this.beat(Date.now() + 15000);
                         if (!(await this.sleepUntil(Date.now() + 15000))) continue;
                         UI.setStatus("statusRunning");
                         continue;
@@ -519,7 +587,14 @@ const Automation = {
                 // dokunmuyoruz — satırlardan beslenen tick en küçüğü yazıyor.
                 UI.setStarted();
 
+                // Watchdog'a "bu saatte uyanmam gerekiyor" de. Uyanmazsam
+                // (sekme donduysa) motoru o yeniden başlatır.
+                this.beat(next);
+
                 const sleptFully = await this.sleepUntil(next);
+
+                // Uyandık: bekleme bitti, artık gecikme takibi kapansın.
+                this.beat(0);
 
                 // Duraklatma yüzünden erken uyandıysak "çalışıyor" gösterme;
                 // döngü başındaki botPaused kontrolü zaten çıkışı yönetir.
@@ -667,16 +742,61 @@ const Automation = {
     // Verilen zamana kadar uyur ama 5 saniyede bir uyanıp duraklatma kontrol
     // eder: tek uzun setTimeout ile beklenirse Durdur'a basmak bir saat sonra
     // etki ederdi. Duraklatılırsa erken döner.
+    //
+    // DİKKAT — SEKME ARKA PLANDAYKEN setTimeout GÜVENİLİR DEĞİLDİR.
+    // Chrome, 5 dakikadan uzun süredir gizli olan sekmelerde zamanlayıcıları
+    // "Intensive Throttling" ile dakikada bire düşürür, sekmeyi dondurabilir
+    // (freeze) ya da tamamen atabilir (discard). 57 dakikalık bir bekleme ~684
+    // adım sürüyordu ve bu zincirdeki TEK bir halka uyanmazsa döngü kalıcı
+    // olarak ölüyordu: panel cap'ten beslendiği için "Hazır" yazıyor ama motor
+    // hiç uyanmıyordu. Kullanıcının tek çaresi sayfayı yenilemekti.
+    //
+    // Çözüm: bekleme DUVAR SAATİNE bağlanır, zincirin kesintisizliğine değil.
+    //  - Adım süresi kalan süreye göre büyür (uzun beklemede az sayıda timer).
+    //  - Sekme tekrar görünür olduğunda visibilitychange ile HEMEN uyanılır;
+    //    böylece throttle yüzünden geciken timer beklenmez.
+    //  - Döngü koşulu Date.now() olduğu için, timer ne kadar geç ateşlerse
+    //    ateşlesin uyanınca doğru kararı verir.
     async sleepUntil(timestamp) {
-        const STEP = 5000;
         while (Date.now() < timestamp) {
             const s = await Storage.get(["botPaused"]);
             if (s.botPaused) return false;
 
             const left = timestamp - Date.now();
-            await this.delay(Math.min(STEP, left));
+
+            // Uzun beklemelerde seyrek, son dakikada sık kontrol et. Az sayıda
+            // uzun timer, çok sayıda kısa timerdan daha dayanıklıdır: throttle
+            // edilen her adım gecikme biriktirir.
+            const step = left > 120000 ? 30000 : 5000;
+
+            await this.raceVisibility(Math.min(step, left));
         }
         return true;
+    },
+
+    // ms kadar bekler ama sekme görünür olursa ERKEN döner. Arka planda
+    // gecikmiş bir timer'ı beklemek yerine kullanıcı sekmeye döndüğü anda
+    // devam edebilmek için: throttle'ın en sert olduğu durumda bile motor
+    // sekmeye bakıldığında canlanır.
+    raceVisibility(ms) {
+        return new Promise(resolve => {
+            let done = false;
+
+            const finish = () => {
+                if (done) return;
+                done = true;
+                clearTimeout(handle);
+                document.removeEventListener("visibilitychange", onVisible);
+                resolve();
+            };
+
+            const onVisible = () => {
+                if (!document.hidden) finish();
+            };
+
+            const handle = setTimeout(finish, ms);
+            document.addEventListener("visibilitychange", onVisible);
+        });
     },
 
     // Birikimler kaçıncı adımda? caps/sequences her adımın durumunu DİZİ
