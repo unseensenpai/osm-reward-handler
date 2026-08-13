@@ -718,16 +718,6 @@
 
 }
 
-#osm-update-auto{
-
-    flex:1 1 100%;
-
-    background:#2ecc71 !important;
-
-    color:#123 !important;
-
-}
-
 #osm-update-download{
 
     flex:1;

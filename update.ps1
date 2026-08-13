@@ -3,13 +3,19 @@
 # GitHub Releases'ten son sürümü indirir ve bu klasörün üstüne açar.
 # Kurulumdan sonra chrome://extensions sayfasından "Yenile" demeniz yeterli.
 #
-# Kullanım:
+# Kullanım (uzantının KURULU OLDUĞU klasörde çalıştırın):
 #   .\update.ps1              son sürüme güncelle
 #   .\update.ps1 -Check       yalnızca kontrol et, indirme
 #   .\update.ps1 -Force       aynı sürüm olsa da yeniden indir
 #
+# Klasörü açmanın kolay yolu: chrome://extensions → uzantı kartındaki
+# "Kaynak" (Source) satırında yol yazar. Explorer'da o klasöre girip
+# adres çubuğuna "powershell" yazıp Enter'a basın; shell orada açılır.
+#
 # NOT: Chrome uzantıları kendilerini güncelleyemez (unpacked kurulumda uzantı
-# kendi dosyalarına yazamaz). Bu script o boşluğu doldurur.
+# kendi dosyalarına yazamaz) ve paneldeki bir butondan bu script'i çalıştırmak
+# da mümkün değil — sayfa ne disk yolunu görebilir ne de shell açabilir.
+# Bu yüzden script elle çalıştırılır; gerisini (indirme, yedek, kurulum) yapar.
 
 [CmdletBinding()]
 param(

@@ -81,7 +81,6 @@ const UI = {
             <div id="osm-update-banner" style="display:none;">
                 <div id="osm-update-text"></div>
                 <div id="osm-update-actions">
-                    <button id="osm-update-auto" title="${ContentI18N.t('btnUpdateAutoTooltip')}">${ContentI18N.t('btnUpdateAuto')}</button>
                     <button id="osm-update-download">${ContentI18N.t('btnUpdateDownload')}</button>
                     <button id="osm-update-notes">${ContentI18N.t('btnUpdateNotes')}</button>
                     <button id="osm-update-dismiss" title="${ContentI18N.t('btnUpdateDismissTooltip')}">✕</button>
@@ -184,24 +183,16 @@ const UI = {
     registerUpdateEvents() {
         if (!this.panel) return;
 
-        const auto = this.panel.querySelector("#osm-update-auto");
         const dl = this.panel.querySelector("#osm-update-download");
         const notes = this.panel.querySelector("#osm-update-notes");
         const dismiss = this.panel.querySelector("#osm-update-dismiss");
 
-        // "Otomatik kur": uzantı kendi dosyalarına yazamadığı için kurulumu
-        // update.ps1 yapar. Buton komutu panoya kopyalar; kullanıcı PowerShell'e
-        // yapıştırıp çalıştırır, script indirir + kurar.
-        if (auto) auto.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            const ok = await Updater.copyInstallCommand();
-            auto.textContent = ok
-                ? ContentI18N.t('btnUpdateAutoCopied')
-                : ContentI18N.t('btnUpdateAutoFailed');
-            setTimeout(() => {
-                auto.textContent = ContentI18N.t('btnUpdateAuto');
-            }, 2500);
-        });
+        // "Otomatik kur" KALDIRILDI (v3.4.7). Uzantı kendi disk yolunu göremez
+        // (yalnızca chrome-extension:// URL'i görünür), sayfadan klasör açmak
+        // ya da shell çalıştırmak da engelli. Buton bu yüzden yalnızca
+        // ".\update.ps1" metnini panoya kopyalayabiliyordu; kullanıcı klasörü
+        // kendi bulmak zorunda kaldığı için hiçbir işe yaramıyordu.
+        // Akış artık dürüstçe elle: İndir → klasöre çıkar → Chrome'dan Yenile.
 
         // stopPropagation: panel başlığı sürüklenebilir, buton tıklaması
         // sürükleme başlatmasın.

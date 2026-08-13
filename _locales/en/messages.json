@@ -123,19 +123,7 @@
     "message": "⬆ New version: v${latest} (you have v${current})"
   },
   "updateHint": {
-    "message": "Auto install: copies a command — paste it into PowerShell in the extension folder. Or Download → chrome://extensions → Reload"
-  },
-  "btnUpdateAuto": {
-    "message": "Auto install"
-  },
-  "btnUpdateAutoTooltip": {
-    "message": "Copies the update.ps1 command (downloads and installs)"
-  },
-  "btnUpdateAutoCopied": {
-    "message": "✓ Copied"
-  },
-  "btnUpdateAutoFailed": {
-    "message": "See console"
+    "message": "1) Download  2) Extract the ZIP over your extension folder  3) chrome://extensions → Reload"
   },
   "btnUpdateDownload": {
     "message": "Download"

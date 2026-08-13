@@ -123,19 +123,7 @@
     "message": "⬆ Yeni sürüm: v${latest} (sizde v${current})"
   },
   "updateHint": {
-    "message": "Otomatik kur: komutu kopyalar, uzantı klasöründe PowerShell'e yapıştır. Ya da İndir → chrome://extensions → Yenile"
-  },
-  "btnUpdateAuto": {
-    "message": "Otomatik kur"
-  },
-  "btnUpdateAutoTooltip": {
-    "message": "update.ps1 komutunu panoya kopyalar (indirir ve kurar)"
-  },
-  "btnUpdateAutoCopied": {
-    "message": "✓ Kopyalandı"
-  },
-  "btnUpdateAutoFailed": {
-    "message": "Konsola bakın"
+    "message": "1) İndir  2) ZIP'i uzantı klasörüne çıkar (üzerine yaz)  3) chrome://extensions → Yenile"
   },
   "btnUpdateDownload": {
     "message": "İndir"

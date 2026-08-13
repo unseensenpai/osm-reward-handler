@@ -167,32 +167,14 @@ const Updater = {
     openReleasePage() {
         if (!this.latest) return;
         window.open(this.latest.url, "_blank", "noopener");
-    },
-
-    // "Otomatik kur" akışı. Uzantı kendi dosyalarına yazamadığı için gerçek
-    // kurulumu depodaki update.ps1 yapar; burada onu çalıştıracak komutu
-    // panoya koyuyoruz. Kullanıcı PowerShell'e yapıştırıp Enter'a basıyor.
-    //
-    // Uzantının kurulu olduğu klasörü JS'ten öğrenmek mümkün değil (yalnızca
-    // chrome-extension:// URL'i görünür, disk yolu değil). Bu yüzden komut
-    // klasöre girmeyi kullanıcıya bırakır: script kendi konumundan çalışır.
-    installCommand() {
-        return ".\\update.ps1";
-    },
-
-    async copyInstallCommand() {
-        const cmd = this.installCommand();
-        try {
-            await navigator.clipboard.writeText(cmd);
-            Logger.success(`Kurulum komutu panoya kopyalandı: ${cmd}`);
-            Logger.info("Uzantı klasöründe PowerShell açıp yapıştırın (script indirir ve kurar).");
-            return true;
-        } catch (e) {
-            // Pano izni yoksa konsola bas; oradan alınabilir.
-            Logger.warning("Pano erişimi yok. Komut: " + cmd);
-            console.log("[OSM] Kurulum komutu:", cmd);
-            return false;
-        }
     }
+
+    // NOT — "Otomatik kur" v3.4.7'de KALDIRILDI, geri eklemeyin.
+    // Uzantı kendi disk yolunu göremez (yalnızca chrome-extension:// URL'i
+    // görünür), sayfadan klasör açmak veya shell çalıştırmak da engellidir.
+    // Buton bu yüzden yalnızca ".\update.ps1" metnini panoya kopyalayabiliyor,
+    // klasörü bulmayı kullanıcıya bırakıyordu — pratikte hiçbir işe yaramadı.
+    // update.ps1 hâlâ depoda ve çalışıyor: klasörüne gidip elle çalıştıran
+    // için indirme + yedek + kurulumu tek adımda yapar.
 
 };
