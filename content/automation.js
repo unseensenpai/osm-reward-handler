@@ -703,8 +703,21 @@ const Automation = {
                 return done(false, "banned");
             }
 
+            // Slot listesini HER denemede tazele — "boşsa tazele" YETMİYORDU.
+            // Süresi dolan antrenmanın oyuncusu toplanınca o slot sunucuda
+            // kapanır, yerine yenisi açılır. Liste boş olmadığı için ready()
+            // true dönüyor, tazeleme atlanıyordu: panel ölü slotları eski
+            // süreleriyle göstermeye devam ediyor, round-robin de kapanmış
+            // sessionId'ye consume atıyordu. Kullanıcının "süre bitince
+            // butona basınca antrenör süreleri yenilenmiyor" dediği hata bu.
+            //
+            // Tek tur = tek istek; elle basılan buton için maliyet önemsiz.
+            if (target.needsSession && TargetContext.leagueId && TargetContext.teamId) {
+                await TargetContext.refreshTrainingSessions();
+            }
+
             if (!TargetContext.ready(target)) {
-                // Antrenman slotları veya lig/takım henüz bilinmiyor olabilir.
+                // Lig/takım henüz bilinmiyorsa yukarıdaki tazeleme de yapılamaz.
                 if (target.needsSession) await TargetContext.refreshTrainingSessions();
                 if (!TargetContext.ready(target)) {
                     Logger.warning(`${key}: bağlam hazır değil (lig/takım/slot).`);
@@ -942,6 +955,13 @@ const Automation = {
             // şeyi ölçüyor: antrenmanın kendi bitişi, reklam hakkını değil).
             if (typeof TargetTimers !== "undefined" && start.timestampUntilUnreached) {
                 TargetTimers.setCap(target.key, start.timestampUntilUnreached);
+            }
+            // Cap'e takılan tur consume'a HİÇ ulaşmaz, dolayısıyla aşağıdaki
+            // slot tazelemesi de çalışmazdı: cap dolu olduğu sürece panel eski
+            // slot listesini gösteriyordu. Ödül alınamasa da kullanıcı doğru
+            // süreleri görmeli — hangi antrenörün bittiğini buradan anlıyor.
+            if (target.needsSession) {
+                await TargetContext.refreshTrainingSessions();
             }
             return { ok: false, capReached: true, until };
         }
