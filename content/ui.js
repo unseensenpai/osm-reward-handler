@@ -70,7 +70,7 @@ const UI = {
                     ⚽ OSM Reward Handler
                 </div>
 
-                <div id="osm-version">
+                <div id="osm-version" title="${ContentI18N.t('checkUpdateTooltip')}">
                     ${this.getVersion()}
                 </div>
 
@@ -186,6 +186,28 @@ const UI = {
         const dl = this.panel.querySelector("#osm-update-download");
         const notes = this.panel.querySelector("#osm-update-notes");
         const dismiss = this.panel.querySelector("#osm-update-dismiss");
+        const version = this.panel.querySelector("#osm-version");
+
+        // Başlıktaki sürüm yazısı = "güncellemeleri denetle". Otomatik kontrol
+        // 6 saatte bir; release yeni çıktıysa kullanıcı beklemek zorunda
+        // kalmasın. Elle kontrol (manual=true) ayrıca "en güncelsiniz" der ve
+        // daha önce "şimdi değil" denmiş sürümü yine gösterir.
+        if (version) version.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (version.dataset.busy) return;   // çift tıklama = çift istek
+
+            version.dataset.busy = "1";
+            const original = version.textContent;
+            version.textContent = ContentI18N.t('checkUpdateChecking');
+
+            try {
+                await Updater.check(true);
+            } finally {
+                // Sürüm metni sabit; sonucu Logger ve banner anlatır.
+                version.textContent = original;
+                delete version.dataset.busy;
+            }
+        });
 
         // "Otomatik kur" KALDIRILDI (v3.4.7). Uzantı kendi disk yolunu göremez
         // (yalnızca chrome-extension:// URL'i görünür), sayfadan klasör açmak
@@ -248,6 +270,13 @@ const UI = {
         if (this.delaySlider) this.setDelayText(Number(this.delaySlider.value));
         if (this.collapseButton) this.collapseButton.title = ContentI18N.t('collapseTooltip');
         if (this.dock) this.dock.title = ContentI18N.t('expandTooltip');
+
+        const versionEl = this.panel && this.panel.querySelector("#osm-version");
+        if (versionEl) versionEl.title = ContentI18N.t('checkUpdateTooltip');
+
+        // Güncelleme bandı açıksa metinleri de çevir: dil değişince banda
+        // dokunulmuyordu ve eski dildeki yönerge ekranda kalıyordu.
+        if (this.updateHint) this.updateHint.textContent = ContentI18N.t('updateHint');
 
         const targetsLabel = this.panel && this.panel.querySelector("#osm-label-targets");
         if (targetsLabel) targetsLabel.textContent = ContentI18N.t('labelTargets');
@@ -812,6 +841,9 @@ const UI = {
         this.header.addEventListener("mousedown", (e) => {
             if (e.button !== 0) return;
             if (e.target.closest("#osm-collapse-btn")) return;
+            // Sürüm yazısı tıklanabilir (güncelleme denetler); üzerine basmak
+            // paneli sürüklemeye başlamasın, yoksa tıklama sürüklemeye kayıyor.
+            if (e.target.closest("#osm-version")) return;
 
             const rect = this.panel.getBoundingClientRect();
             startX = e.clientX;

@@ -125,6 +125,12 @@
   "updateHint": {
     "message": "1) İndir  2) ZIP'i uzantı klasörüne çıkar (üzerine yaz)  3) chrome://extensions → Yenile"
   },
+  "checkUpdateTooltip": {
+    "message": "Güncellemeleri denetlemek için tıklayın"
+  },
+  "checkUpdateChecking": {
+    "message": "denetleniyor…"
+  },
   "btnUpdateDownload": {
     "message": "İndir"
   },

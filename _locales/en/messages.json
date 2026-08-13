@@ -125,6 +125,12 @@
   "updateHint": {
     "message": "1) Download  2) Extract the ZIP over your extension folder  3) chrome://extensions → Reload"
   },
+  "checkUpdateTooltip": {
+    "message": "Click to check for updates"
+  },
+  "checkUpdateChecking": {
+    "message": "checking…"
+  },
   "btnUpdateDownload": {
     "message": "Download"
   },

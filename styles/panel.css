@@ -583,6 +583,23 @@
 
     opacity:.6;
 
+    /* Tıklanabilir: güncellemeleri denetler. Başlık sürüklenebilir olduğu için
+       imleç varsayılanda "move" görünür; burada işaretçiye çevirip tıklanabilir
+       olduğunu belli ediyoruz (mousedown muafiyeti registerDrag içinde). */
+    cursor:pointer;
+
+    user-select:none;
+
+    transition:opacity .15s;
+
+}
+
+#osm-version:hover{
+
+    opacity:1;
+
+    text-decoration:underline;
+
 }
 
 .osm-section{
