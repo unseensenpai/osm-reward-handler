@@ -294,7 +294,8 @@
 
 }
 
-.osm-target-time.osm-target-ready{
+.osm-target-time.osm-target-ready,
+.osm-slot-time.osm-target-ready{
 
     color:#27ae60;
 

@@ -9,6 +9,9 @@ const Automation = {
     tooLateStreak: 0,
     bypassMode: false,
     modalCloseMode: false,
+    // Geçici taktik devrede mi? true iken modalCloseMode kullanıcı tercihi
+    // değil, API hatasına karşı bellekteki kaçış yoludur. Diske YAZILMAZ.
+    tacticOverride: false,
     consecutiveApiFails: 0,
 
     async start() {
@@ -42,6 +45,8 @@ const Automation = {
 
         this.bypassMode = state.bypassMode || false;
         this.modalCloseMode = state.modalCloseMode || false;
+        // Yeni başlangıç: geçici taktik sıfırlanır, kullanıcı tercihi geçerli.
+        this.tacticOverride = false;
 
         if (state.botPaused) {
             Logger.info("Bot durdurulmuş.");
@@ -93,8 +98,12 @@ const Automation = {
     // location.reload YOK — yeni reklamlar arkada tıklama ile açılır.
     async modalLoop() {
         Logger.success("Modal döngüsü başladı.");
-        const prefs = await Storage.get(["modalCloseMode"]);
-        this.modalCloseMode = prefs.modalCloseMode || false;
+        // Fallback taktiği devredeyse kullanıcı tercihini OKUMA: aksi halde
+        // az önce bellekte seçilen taktik hemen eziliyordu.
+        if (!this.tacticOverride) {
+            const prefs = await Storage.get(["modalCloseMode"]);
+            this.modalCloseMode = prefs.modalCloseMode || false;
+        }
         this.waitForButtonAndOpen();
     },
 
@@ -156,10 +165,10 @@ const Automation = {
         // 1) API modundaysak modal'a hiç düşmemeliydik. Motora geri dön.
         if (this.bypassMode) {
             Logger.info("Buton yok ve API modu aktif; çok hedefli motora dönülüyor.");
+            // Yalnızca bellekteki fallback taktiğini bırak. Storage'a
+            // yazmıyoruz: kullanıcının mod tikleri bu koddan etkilenmemeli.
             this.modalCloseMode = false;
-            // Fallback kalıcı yazmış olabilir; API moduna dönerken temizle ki
-            // sonraki başlatmada yanlış taktik seçilmesin.
-            await Storage.set({ modalCloseMode: false });
+            this.tacticOverride = false;
             if (this.buttonSearchInterval) {
                 clearInterval(this.buttonSearchInterval);
                 this.buttonSearchInterval = null;
@@ -1006,7 +1015,11 @@ const Automation = {
             rewardType: reward.type
         };
         if (target.needsSession && !ctx.sessionId) {
-            Logger.warning("Antrenman slotu bilinmiyor, hedef atlanıyor.");
+            // Slot henüz keşfedilmemiş olabilir ya da kullanıcı seçtiği
+            // slot(lar)ı kapatmış olabilir. İkisinde de hedef atlanır.
+            Logger.warning(TargetContext.selectedSessions.length > 0
+                ? "Seçili antrenman slotu şu an listede yok, hedef atlanıyor."
+                : "Antrenman slotu bilinmiyor, hedef atlanıyor.");
             return { ok: false };
         }
 
@@ -1117,10 +1130,12 @@ const Automation = {
             Logger.warning("API üst üste başarısız; Modal Odak Kaybı taktiğine geçiliyor.");
             this.consecutiveApiFails = 0;
 
-            // Bellekteki bayrağı modalLoop storage'dan geri okuyup EZİYORDU;
-            // fallback'in seçtiği taktik hiç uygulanmıyordu. Kalıcı yaz.
+            // YALNIZCA bellekte. Bu, geçici API hatasına karşı çalışma-anı
+            // taktiği; kullanıcının mod tercihi DEĞİL. Eskiden storage'a
+            // yazılıyordu ve panelde "Modal odak" tiki kendiliğinden açılıp
+            // "API bypass" tiki düşüyordu. Tikleri yalnızca kullanıcı değiştirir.
             this.modalCloseMode = true;
-            await Storage.set({ modalCloseMode: true });
+            this.tacticOverride = true;
 
             this.modalLoop();
             return true;

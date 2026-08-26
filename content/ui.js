@@ -535,6 +535,8 @@ const UI = {
             const box = e.target.closest(".osm-slot-check");
             if (!box) return;
 
+            // dataset.session artık kalıcı slotKey (antrenman bitince değişen
+            // session id DEĞİL); seçim döngüler arasında korunsun diye.
             const checked = [...this.panel.querySelectorAll(".osm-slot-check")]
                 .filter(b => b.checked)
                 .map(b => b.dataset.session);
@@ -561,10 +563,13 @@ const UI = {
         }
 
         const selected = TargetContext.selectedSessions;
-        const allMode = selected.length === 0;
+        // Seçim boş VE kullanıcı bilerek hepsini kaldırmadıysa "hepsi" modu.
+        // Kullanıcı tikleri kendi eliyle kaldırdıysa boş liste boş kalmalı,
+        // yoksa tikler kendiliğinden geri gelirdi.
+        const allMode = selected.length === 0 && !TargetContext.allDeselected;
 
         box.innerHTML = details.map(d => {
-            const checked = allMode || selected.includes(d.id) ? "checked" : "";
+            const checked = allMode || selected.includes(d.slotKey) ? "checked" : "";
             const ms = d.finishedTimestamp
                 ? Math.max(0, d.finishedTimestamp * 1000 - Date.now())
                 : null;
@@ -576,7 +581,7 @@ const UI = {
             const who = d.player ? ` · ${d.player}` : "";
             return `
                 <label class="osm-slot-row">
-                    <input type="checkbox" class="osm-slot-check" data-session="${d.id}" ${checked}>
+                    <input type="checkbox" class="osm-slot-check" data-session="${d.slotKey}" ${checked}>
                     <span class="osm-slot-name" title="${d.title}${who}">${d.title}</span>
                     <span class="osm-slot-time">${left}</span>
                 </label>
@@ -735,14 +740,25 @@ const UI = {
 
             // Açık slot listesindeki süreler de aksın.
             this.panel.querySelectorAll(".osm-slot-row").forEach(r => {
-                const id = r.querySelector(".osm-slot-check")?.dataset.session;
+                // dataset.session artık slotKey; eşleştirme de onunla yapılır
+                // (id ile arasaydı hiç bulamaz, süreler donardı).
+                const slotKey = r.querySelector(".osm-slot-check")?.dataset.session;
                 const cell = r.querySelector(".osm-slot-time");
-                if (!id || !cell) return;
-                const d = (TargetContext.sessionDetails || []).find(x => x.id === id);
+                if (!slotKey || !cell) return;
+                const d = (TargetContext.sessionDetails || []).find(x => x.slotKey === slotKey);
                 if (!d || !d.finishedTimestamp) return;
-                cell.textContent = this.formatCountdown(
-                    Math.max(0, d.finishedTimestamp * 1000 - Date.now())
-                );
+
+                // Süre dolunca "00:00:00" değil "Hazır" yazmalı. renderSlots
+                // bunu yapıyordu ama satırı saniyede bir ezen yer BURASI;
+                // sıfır kontrolü olmadığı için ekranda 00:00:00 kalıyordu.
+                const ms = d.finishedTimestamp * 1000 - Date.now();
+                if (ms <= 0) {
+                    cell.textContent = ContentI18N.t('targetReady');
+                    cell.classList.add("osm-target-ready");
+                } else {
+                    cell.textContent = this.formatCountdown(ms);
+                    cell.classList.remove("osm-target-ready");
+                }
             });
         };
 

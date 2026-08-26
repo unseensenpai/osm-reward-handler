@@ -137,12 +137,25 @@ const TargetContext = {
 
     async restore() {
         const s = await Storage.get([
-            "ctxLeagueId", "ctxTeamId", "ctxTrainingSessions", "ctxSelectedSessions"
+            "ctxLeagueId", "ctxTeamId", "ctxTrainingSessions", "ctxSelectedSessions",
+            "ctxAllDeselected"
         ]);
         if (s.ctxLeagueId) this.leagueId = s.ctxLeagueId;
         if (s.ctxTeamId) this.teamId = s.ctxTeamId;
         if (Array.isArray(s.ctxTrainingSessions)) this.trainingSessions = s.ctxTrainingSessions;
-        if (Array.isArray(s.ctxSelectedSessions)) this.selectedSessions = s.ctxSelectedSessions;
+
+        if (Array.isArray(s.ctxSelectedSessions)) {
+            // Göç: v3.4.8 ve öncesi ham session id saklıyordu. O id'ler
+            // antrenman bitince geçersiz olur ve slotKey ile eşleşmez;
+            // kullanıcıyı yanlış slotla baş başa bırakmamak için temizlenir
+            // ("hepsi"ne dönülür, bu güvenli varsayılan).
+            const looksLegacy = s.ctxSelectedSessions.some(v => !String(v).startsWith("t"));
+            this.selectedSessions = looksLegacy ? [] : s.ctxSelectedSessions;
+        }
+
+        this.allDeselected = s.ctxAllDeselected === true
+            && Array.isArray(this.selectedSessions)
+            && this.selectedSessions.length === 0;
     },
 
     // Sayfanın kendi trafiğinden lig/takım kimliğini öğren.
@@ -201,15 +214,29 @@ const TargetContext = {
             });
 
         this.trainingSessions = sorted.map(s => String(s.id));
-        this.sessionDetails = sorted.map(s => ({
-            id: String(s.id),
-            trainer: s.trainer,
-            title: s.countdownTimer?.title || "",
-            player: s.player?.fullName || "",
-            finishedTimestamp: s.countdownTimer?.finishedTimestamp || 0,
-            // timers yanıtıyla eşleştirmek için: süreler oradan tazeleniyor.
-            countdownTimerId: s.countdownTimerId ?? s.countdownTimer?.id ?? null
-        }));
+
+        // Slot kimliği: session.id HER antrenman döngüsünde değişir (bitince
+        // "ongoing"den düşer, yenisi yeni id ile gelir). Kullanıcı seçimini
+        // ona bağlamak seçimi antrenman bitince siliyordu. trainer tipi
+        // (1 Hücum, 2 Orta saha, 3 Defans, 4 Kaleci, 18 Evrensel) döngüler
+        // arasında sabit; aynı tipten birden çok slot olabildiği için tip
+        // içindeki sıra numarasıyla eşleştirilir.
+        const seen = {};
+        this.sessionDetails = sorted.map(s => {
+            const trainer = s.trainer ?? "x";
+            seen[trainer] = (seen[trainer] || 0) + 1;
+            return {
+                id: String(s.id),
+                trainer: s.trainer,
+                // Kullanıcı seçiminin bağlandığı kalıcı anahtar.
+                slotKey: `t${trainer}#${seen[trainer]}`,
+                title: s.countdownTimer?.title || "",
+                player: s.player?.fullName || "",
+                finishedTimestamp: s.countdownTimer?.finishedTimestamp || 0,
+                // timers yanıtıyla eşleştirmek için: süreler oradan tazeleniyor.
+                countdownTimerId: s.countdownTimerId ?? s.countdownTimer?.id ?? null
+            };
+        });
 
         await Storage.set({ ctxTrainingSessions: this.trainingSessions });
 
@@ -239,19 +266,39 @@ const TargetContext = {
     // henüz seçim yapmadı); böylece varsayılan davranış eskisiyle aynı kalır.
     selectedSessions: [],
 
-    async setSelectedSessions(ids) {
-        this.selectedSessions = Array.isArray(ids) ? ids : [];
+    // Artık slotKey listesi saklanır (bkz. refreshTrainingSessions). Boş dizi
+    // = "hepsi". Kullanıcı tikini kaldırıp listeyi boşaltabilir; bu bilinçli
+    // bir seçim, "hepsi"ne dönmek DEĞİL — allDeselected bayrağı ayırt eder.
+    async setSelectedSessions(keys) {
+        this.selectedSessions = Array.isArray(keys) ? keys : [];
+        this.allDeselected = this.selectedSessions.length === 0;
         this.sessionCursor = 0;
-        await Storage.set({ ctxSelectedSessions: this.selectedSessions });
+        await Storage.set({
+            ctxSelectedSessions: this.selectedSessions,
+            ctxAllDeselected: this.allDeselected
+        });
     },
 
+    // Kullanıcı tüm tikleri bilerek kaldırdı mı? (seçim boş + bu bayrak)
+    allDeselected: false,
+
     // Round-robin havuzu: kullanıcı seçim yaptıysa yalnızca onlar, yoksa
-    // bilinen tüm slotlar. Seçilenler arada silinmiş olabilir (antrenman
-    // bitti), o yüzden mevcut listeyle kesiştirilir.
+    // bilinen tüm slotlar. Seçim slotKey ile tutulur, burada güncel id'ye
+    // çevrilir; böylece antrenman bitip yeni id gelse de seçim korunur.
     sessionPool() {
-        if (this.selectedSessions.length === 0) return this.trainingSessions;
-        const pool = this.selectedSessions.filter(id => this.trainingSessions.includes(id));
-        return pool.length > 0 ? pool : this.trainingSessions;
+        if (this.selectedSessions.length === 0) {
+            // Kullanıcı hepsini bilerek kaldırdıysa hiçbirini işleme.
+            return this.allDeselected ? [] : this.trainingSessions;
+        }
+
+        const pool = this.sessionDetails
+            .filter(d => this.selectedSessions.includes(d.slotKey))
+            .map(d => d.id);
+
+        // Seçilen slot şu an listede yoksa (o tip antrenman yok) boş döner;
+        // "hepsine geç" YAPILMAZ, yoksa kullanıcının seçmediği slotlar da
+        // işlenirdi.
+        return pool;
     },
 
     // Round-robin: her çağrıda sıradaki slot. Liste boşsa null döner ve
@@ -490,9 +537,26 @@ const TargetTimers = {
             const byTimerId = {};
             timers.forEach(t => { byTimerId[t.id] = t; });
 
+            // Bir slotun süresi dolduysa o antrenman bitmiştir: "ongoing"
+            // listesinden düşer, yerine YENİ oyuncu/slot gelir. timers yalnızca
+            // süreyi tazeler, oyuncu adını DEĞİL — bu yüzden liste yeniden
+            // çekilmezse panel bitmiş antrenmanın oyuncusunu göstermeye devam
+            // ediyordu. Hazırdaki oyuncuyu görebilmek için burada tazeleriz.
+            let finished = false;
+            const nowSec = Math.floor(Date.now() / 1000);
+
             for (const d of TargetContext.sessionDetails) {
                 const t = byTimerId[d.countdownTimerId];
                 if (t && t.finishedTimestamp) d.finishedTimestamp = t.finishedTimestamp;
+                if (d.finishedTimestamp && d.finishedTimestamp <= nowSec) finished = true;
+            }
+
+            // Tek uçuş: art arda poll'lerde istek yığılmasın.
+            if (finished && !this._sessionRefreshing) {
+                this._sessionRefreshing = true;
+                TargetContext.refreshTrainingSessions()
+                    .catch(e => Logger.warning(`Slot tazeleme hatası: ${e.message}`))
+                    .finally(() => { this._sessionRefreshing = false; });
             }
         }
 
